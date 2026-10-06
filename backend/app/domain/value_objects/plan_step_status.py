@@ -1,0 +1,11 @@
+from enum import StrEnum
+
+
+class PlanStepStatus(StrEnum):
+    PENDING = "PENDING"
+    WAITING_PERMISSION = "WAITING_PERMISSION"
+    APPROVED = "APPROVED"
+    EXECUTING = "EXECUTING"
+    COMPLETED = "COMPLETED"
+    FAILED = "FAILED"
+    BLOCKED = "BLOCKED"

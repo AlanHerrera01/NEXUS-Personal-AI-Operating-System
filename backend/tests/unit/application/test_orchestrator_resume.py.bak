@@ -1,0 +1,80 @@
+import asyncio
+import pytest
+
+from app.application.agents.orchestrator import AgentOrchestrator
+from app.application.agents.context_builder import AgentContextBuilder
+from app.application.tools.executor import RegistryToolExecutor
+from app.application.tools.registry import InMemoryToolRegistry
+from app.domain.entities.agent_run import AgentRun
+from app.domain.ports.agent_brain import AgentDecision
+from app.domain.ports.tool import Tool, ToolContext, ToolDefinition, ToolResult
+from app.infrastructure.security.trust_engine import DeterministicTrustEngine
+from app.domain.value_objects.entity_id import EntityId
+from app.domain.value_objects.risk_level import RiskLevel
+from tests.unit.application.test_orchestrator import FakeActionRepository, FakeRunRepository, SequenceBrain
+
+
+class ConfirmationTool(Tool):
+    def definition(self):
+        return ToolDefinition("calendar.create", "Create event", {"type": "object"}, "calendar", RiskLevel.MEDIUM, True)
+
+    async def execute(self, arguments, context: ToolContext):
+        return ToolResult(True, "calendar.create", {"created": True})
+
+
+def test_resume_allow_executes_pending_action() -> None:
+    registry = InMemoryToolRegistry([ConfirmationTool()])
+    actions = FakeActionRepository()
+    orchestrator = AgentOrchestrator(
+        SequenceBrain(AgentDecision.tool_call("calendar.create", {})),
+        AgentContextBuilder(None, registry), registry, RegistryToolExecutor(registry),
+        DeterministicTrustEngine(), FakeRunRepository(), actions, max_iterations=2,
+    )
+    run = AgentRun(EntityId.new(), "Create an event", user_id=EntityId.new())
+    pending = asyncio.run(orchestrator.execute(run, user_id=str(run.user_id)))
+    completed = asyncio.run(
+        orchestrator.resume(run, True, user_id=str(run.user_id))
+    )
+
+    assert pending.question == "Allow calendar.create?"
+    assert completed.run.status.value == "COMPLETED"
+
+
+def test_resume_deny_blocks_pending_action() -> None:
+    registry = InMemoryToolRegistry([ConfirmationTool()])
+    actions = FakeActionRepository()
+    orchestrator = AgentOrchestrator(
+        SequenceBrain(AgentDecision.tool_call("calendar.create", {})),
+        AgentContextBuilder(None, registry), registry, RegistryToolExecutor(registry),
+        DeterministicTrustEngine(), FakeRunRepository(), actions, max_iterations=2,
+    )
+    run = AgentRun(EntityId.new(), "Create an event", user_id=EntityId.new())
+    asyncio.run(orchestrator.execute(run, user_id=str(run.user_id)))
+    blocked = asyncio.run(
+        orchestrator.resume(run, False, user_id=str(run.user_id))
+    )
+
+    assert blocked.run.status.value == "BLOCKED"
+    assert blocked.response == "Action denied by user"
+
+
+def test_resume_without_an_identity_is_refused() -> None:
+    """A run parked on an approval must not be resumable anonymously.
+
+    Resume drives a state transition and mints a fresh authorization. Accepting
+    it without an identity would mean the caller who answers the prompt is not
+    the person the request was raised for -- and the permission request carries
+    an owner precisely so that check is possible.
+    """
+    registry = InMemoryToolRegistry([ConfirmationTool()])
+    orchestrator = AgentOrchestrator(
+        SequenceBrain(AgentDecision.tool_call("calendar.create", {})),
+        AgentContextBuilder(None, registry), registry, RegistryToolExecutor(registry),
+        DeterministicTrustEngine(), FakeRunRepository(), FakeActionRepository(),
+        max_iterations=2,
+    )
+    run = AgentRun(EntityId.new(), "Create an event", user_id=EntityId.new())
+    asyncio.run(orchestrator.execute(run, user_id=str(run.user_id)))
+
+    with pytest.raises(AuthorizationError):
+        asyncio.run(orchestrator.resume(run, True))

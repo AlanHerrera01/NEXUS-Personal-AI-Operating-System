@@ -1,0 +1,78 @@
+from enum import StrEnum
+
+
+class RuntimeEventType(StrEnum):
+    """Structured observability events for the runtime layer. Never carries secrets."""
+
+    RUNTIME_CREATED = "RUNTIME_CREATED"
+    RUNTIME_STARTED = "RUNTIME_STARTED"
+    RUNTIME_POLICY_APPLIED = "RUNTIME_POLICY_APPLIED"
+    RUNTIME_POLICY_REJECTED = "RUNTIME_POLICY_REJECTED"
+    RUNTIME_EXECUTION_STARTED = "RUNTIME_EXECUTION_STARTED"
+    RUNTIME_EXECUTION_COMPLETED = "RUNTIME_EXECUTION_COMPLETED"
+    RUNTIME_EXECUTION_FAILED = "RUNTIME_EXECUTION_FAILED"
+    RUNTIME_BLOCKED = "RUNTIME_BLOCKED"
+    RUNTIME_TIMEOUT = "RUNTIME_TIMEOUT"
+    RUNTIME_EXPIRED = "RUNTIME_EXPIRED"
+    RUNTIME_STOPPED = "RUNTIME_STOPPED"
+    RUNTIME_UNAVAILABLE = "RUNTIME_UNAVAILABLE"
+    RUNTIME_CLEANED_UP = "RUNTIME_CLEANED_UP"
+
+
+class SecurityEventType(StrEnum):
+    """Violations detected at the isolation boundary.
+
+    Payloads are intentionally coarse: a security log must never become an
+    exfiltration channel for the thing it detected.
+    """
+
+    UNAUTHORIZED_FILESYSTEM_ACCESS = "UNAUTHORIZED_FILESYSTEM_ACCESS"
+    BLOCKED_NETWORK_REQUEST = "BLOCKED_NETWORK_REQUEST"
+    FORBIDDEN_PROCESS = "FORBIDDEN_PROCESS"
+    CREDENTIAL_ACCESS_DENIED = "CREDENTIAL_ACCESS_DENIED"
+    POLICY_VIOLATION = "POLICY_VIOLATION"
+    SANDBOX_ESCAPE_ATTEMPT = "SANDBOX_ESCAPE_ATTEMPT"
+    CROSS_SESSION_ACCESS_DENIED = "CROSS_SESSION_ACCESS_DENIED"
+    MISSING_AUTHORIZATION = "MISSING_AUTHORIZATION"
+    EXPIRED_RUNTIME_EXECUTION = "EXPIRED_RUNTIME_EXECUTION"
+    RESOURCE_LIMIT_EXCEEDED = "RESOURCE_LIMIT_EXCEEDED"
+
+
+class AuthorizationEventType(StrEnum):
+    """Decisions at the authorization boundary.
+
+    Separate from :class:`SecurityEventType` because the two answer different
+    questions. A security event says a control *fired*; an authorization event
+    says what NEXUS decided about a specific action, and is the record that makes
+    "who asked for what, on whose authority, and what was decided" answerable.
+    """
+
+    TOOL_DENIED = "TOOL_DENIED"
+    TOOL_ALLOWED = "TOOL_ALLOWED"
+    PERMISSION_DENIED = "PERMISSION_DENIED"
+    PERMISSION_GRANTED = "PERMISSION_GRANTED"
+    PERMISSION_REVOKED = "PERMISSION_REVOKED"
+    PERMISSION_REQUESTED = "PERMISSION_REQUESTED"
+    PERMISSION_APPROVED = "PERMISSION_APPROVED"
+    PERMISSION_REJECTED = "PERMISSION_REJECTED"
+    PERMISSION_EXPIRED = "PERMISSION_EXPIRED"
+    #: A human approval was presented to the Trust Engine and the *current*
+    #: policy did not agree with it. The approval is a decision, not authority.
+    APPROVAL_OVERRULED = "APPROVAL_OVERRULED"
+    UNAUTHORIZED_RESOURCE = "UNAUTHORIZED_RESOURCE"
+    TRUST_ENGINE_BYPASS_ATTEMPT = "TRUST_ENGINE_BYPASS_ATTEMPT"
+    INVALID_WEBHOOK = "INVALID_WEBHOOK"
+    PROMPT_INJECTION_DETECTED = "PROMPT_INJECTION_DETECTED"
+    MEMORY_POISONING_DETECTED = "MEMORY_POISONING_DETECTED"
+    SECRET_DETECTED = "SECRET_DETECTED"
+    RATE_LIMIT_EXCEEDED = "RATE_LIMIT_EXCEEDED"
+    SUSPICIOUS_AGENT_LOOP = "SUSPICIOUS_AGENT_LOOP"
+    PLAN_REJECTED = "PLAN_REJECTED"
+    UNTRUSTED_MCP_OUTPUT = "UNTRUSTED_MCP_OUTPUT"
+
+
+__all__ = (
+    "AuthorizationEventType",
+    "RuntimeEventType",
+    "SecurityEventType",
+)
