@@ -1,0 +1,20 @@
+graph TB
+    subgraph "Docker Network"
+        Nginx[Nginx<br/>Frontend Server]
+        Frontend[React PWA]
+        API[FastAPI Backend]
+        PostgreSQL[(PostgreSQL<br/>+ pgvector)]
+    end
+
+    Client[Client Browser] -->|HTTPS| Nginx
+    Nginx -->|Static Files| Frontend
+    Nginx -->|/api/*| API
+    API -->|SQL| PostgreSQL
+    API -->|LLM Calls| Nebius[Nebius API<br/>Nemotron 3.5 Super VL]
+
+    style Client fill:#e1f5ff
+    style Nginx fill:#fff4e1
+    style Frontend fill:#e1ffe1
+    style API fill:#ffe1e1
+    style PostgreSQL fill:#ffe1f0
+    style Nebius fill:#f0e1ff

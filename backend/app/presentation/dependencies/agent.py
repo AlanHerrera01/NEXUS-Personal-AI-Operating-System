@@ -12,6 +12,8 @@ from app.application.memory.get_memory import GetMemoryUseCase
 from app.application.memory.policy import DeterministicMemoryPolicy
 from app.application.memory.save_memory import SaveMemoryUseCase
 from app.application.memory.search_memories import SearchMemoriesUseCase
+from app.infrastructure.skills.calendar.skill import CalendarSkill
+from app.infrastructure.skills.github.skill import GitHubSkill
 from app.application.memory.service import MemoryService
 from app.application.agent_runtime.plan_validator import DefaultPlanValidator
 from app.application.security.approval_service import ApprovalService
@@ -59,6 +61,8 @@ def build_skills(task_repository: SqlAlchemyTaskRepository, memory_service: Memo
             save_memory=SaveMemoryUseCase(memory_service),
             delete_memory=DeleteMemoryUseCase(memory_service),
         ),
+        GitHubSkill(),
+        CalendarSkill(),
     ]
 
 

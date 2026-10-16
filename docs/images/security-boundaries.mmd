@@ -1,0 +1,32 @@
+graph LR
+    subgraph Trusted
+        App[Application Code]
+        Trust[Trust Engine]
+        Policy[Security Policy]
+        Config[Configuration]
+    end
+
+    subgraph Untrusted
+        Input[User Input]
+        LLMOut[LLM Output]
+        MCP[MCP Output]
+        Webhook[Webhooks]
+        MemoryContent[Memory Content]
+    end
+
+    Input -->|Validated| App
+    LLMOut -->|Proposals Only| Trust
+    MCP -->|Treated as Data| App
+    Webhook -->|Idempotency Check| App
+    MemoryContent -->|No Privilege| App
+
+    Trust -->|ALLOW/ASK/DENY| App
+    Policy -->|Default DENY| Trust
+    Config -->|Immutable| App
+
+    style Trusted fill:#e8f5e9
+    style Untrusted fill:#ffebee
+    style App fill:#c8e6c9
+    style Trust fill:#ffccbc
+    style Policy fill:#c8e6c9
+    style Config fill:#c8e6c9

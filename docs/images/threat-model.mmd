@@ -1,0 +1,38 @@
+graph TB
+    subgraph "Attack Vectors"
+        Spoofing[Spoofing]
+        Tampering[Tampering]
+        Repudiation[Repudiation]
+        Disclosure[Information Disclosure]
+        DoS[Denial of Service]
+        Elevation[Elevation of Privilege]
+    end
+
+    subgraph "Mitigations"
+        Auth[Ownership Checks<br/>Authenticated Context]
+        Validation[PlanValidator<br/>Schema Validation]
+        Audit[SecurityAuditLog<br/>Provenance Tracking]
+        Isolation[User Isolation<br/>Secret Redaction]
+        RateLimit[Rate Limiting<br/>Resource Budgets]
+        TrustEngine[Trust Engine<br/>Single Gate]
+    end
+
+    Spoofing --> Auth
+    Tampering --> Validation
+    Repudiation --> Audit
+    Disclosure --> Isolation
+    DoS --> RateLimit
+    Elevation --> TrustEngine
+
+    style Spoofing fill:#ffcdd2
+    style Tampering fill:#ffcdd2
+    style Repudiation fill:#ffcdd2
+    style Disclosure fill:#ffcdd2
+    style DoS fill:#ffcdd2
+    style Elevation fill:#ffcdd2
+    style Auth fill:#c8e6c9
+    style Validation fill:#c8e6c9
+    style Audit fill:#c8e6c9
+    style Isolation fill:#c8e6c9
+    style RateLimit fill:#c8e6c9
+    style TrustEngine fill:#ffccbc

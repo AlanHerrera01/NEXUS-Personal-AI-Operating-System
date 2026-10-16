@@ -1,0 +1,28 @@
+graph TB
+    subgraph "Production Environment"
+        LB[Load Balancer<br/>TLS Termination]
+        Nginx[Nginx<br/>Frontend + API Gateway]
+        API1[API Instance 1]
+        API2[API Instance 2]
+        PostgreSQL[(PostgreSQL<br/>Primary)]
+        PostgreSQLReplica[(PostgreSQL<br/>Replica)]
+        Worker[Background Worker<br/>Always-On Scheduler]
+    end
+
+    LB --> Nginx
+    Nginx --> API1
+    Nginx --> API2
+    API1 --> PostgreSQL
+    API2 --> PostgreSQL
+    PostgreSQL --> PostgreSQLReplica
+    Worker --> PostgreSQL
+    Worker --> Nebius[Nebius API]
+
+    style LB fill:#e1f5ff
+    style Nginx fill:#fff4e1
+    style API1 fill:#ffe1e1
+    style API2 fill:#ffe1e1
+    style PostgreSQL fill:#ffe1f0
+    style PostgreSQLReplica fill:#ffe1f0
+    style Worker fill:#e1ffe1
+    style Nebius fill:#f0e1ff

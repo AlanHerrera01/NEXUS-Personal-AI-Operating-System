@@ -1,0 +1,33 @@
+graph TB
+    User[User] -->|Request| Frontend[Frontend PWA]
+    Frontend -->|REST API| API[FastAPI Backend]
+    API --> Orchestrator[Agent Orchestrator]
+    Orchestrator --> Context[Context Builder]
+    Context --> Memory[(Memory<br/>PostgreSQL + pgvector)]
+    Memory --> Context
+    Context --> LLM[Nemotron 3.5 Super VL<br/>via Nebius API]
+    LLM -->|Plan| PlanValidator[Plan Validator]
+    PlanValidator --> TrustEngine[Trust Engine]
+    TrustEngine -->|ALLOW/ASK/DENY| Permission{Decision}
+    Permission -->|ALLOW| ToolExecutor[Tool Executor]
+    Permission -->|ASK| Human[Human Approval]
+    Human -->|Approved| ToolExecutor
+    ToolExecutor --> Skills[Skills Registry]
+    Skills -->|Tools| MCP[MCP Adapter]
+    Skills -->|Native Tools| Runtime[Agent Runtime]
+    Runtime --> Sandbox[OpenShell Sandbox]
+    MCP --> External[External Services]
+    Sandbox --> External
+    ToolExecutor --> Results[Results]
+    Results --> Memory
+    Results --> Orchestrator
+    Orchestrator --> Frontend
+
+    style User fill:#e1f5ff
+    style Frontend fill:#fff4e1
+    style API fill:#e1ffe1
+    style Orchestrator fill:#ffe1e1
+    style TrustEngine fill:#f0e1ff
+    style LLM fill:#e1f5ff
+    style Memory fill:#ffe1f0
+    style Sandbox fill:#e1ffe1

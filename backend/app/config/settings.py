@@ -19,7 +19,7 @@ class Settings(BaseSettings):
     database_url: str = "postgresql+psycopg://nexus@localhost:5432/nexus"
     nebius_api_key: str | None = None
     nebius_base_url: str | None = None
-    nebius_model: str | None = None
+    nebius_model: str = "nvidia/nemotron-3.5-super-vl"
     llm_timeout: float = 60.0
     llm_max_retries: int = 2
     llm_temperature: float = 0.2

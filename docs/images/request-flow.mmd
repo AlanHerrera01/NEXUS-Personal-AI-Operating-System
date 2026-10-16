@@ -1,0 +1,43 @@
+sequenceDiagram
+    participant U as User
+    participant F as Frontend
+    participant A as API
+    participant O as Orchestrator
+    participant M as Memory
+    participant L as LLM
+    participant V as Plan Validator
+    participant T as Trust Engine
+    participant E as Tool Executor
+    participant R as Runtime
+
+    U->>F: Submit Request
+    F->>A: POST /api/v1/agents/{id}/runs
+    A->>O: Create AgentRun
+    O->>M: Load Context & Memories
+    M-->>O: Context Data
+    O->>L: Generate Plan
+    L-->>O: Execution Plan
+    O->>V: Validate Plan
+    V-->>O: Validated Plan
+    O->>T: Request Authorization
+    T->>T: Evaluate Policy
+    alt DENY
+        T-->>O: DENY
+        O-->>F: Error Response
+    else ASK
+        T-->>O: ASK
+        O-->>F: Approval Required
+        F->>U: Show Approval UI
+        U->>F: Approve/Deny
+        F->>A: POST /api/v1/permission-requests/{id}/approve
+        A->>O: Resume Run
+    else ALLOW
+        T-->>O: ALLOW
+    end
+    O->>E: Execute Authorized Tools
+    E->>R: Run in Sandbox
+    R-->>E: Results
+    E-->>O: Tool Results
+    O->>M: Update Memory
+    O-->>F: Final Response
+    F-->>U: Display Result
