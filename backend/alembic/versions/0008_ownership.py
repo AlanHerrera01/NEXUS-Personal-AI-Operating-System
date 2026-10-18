@@ -70,19 +70,22 @@ def upgrade() -> None:
 
     # Backfill before indexing: an index over a column that is mostly NULL is
     # nearly the same size as the table and buys nothing until the data is there.
+    # The cast lives in the SQL, not in a bound parameter: SQLAlchemy refuses to
+    # adapt a ``Cast`` expression as a bound value ("cannot adapt type 'Cast'"),
+    # so binding the text and casting server-side is the portable spelling.
     op.execute(
-        sa.text("UPDATE agents SET user_id = :uid").bindparams(
-            uid=sa.cast(sa.literal(LOCAL_USER_ID), sa.Uuid())
+        sa.text("UPDATE agents SET user_id = CAST(:uid AS uuid)").bindparams(
+            uid=LOCAL_USER_ID
         )
     )
     op.execute(
-        sa.text("UPDATE agent_runs SET user_id = :uid").bindparams(
-            uid=sa.cast(sa.literal(LOCAL_USER_ID), sa.Uuid())
+        sa.text("UPDATE agent_runs SET user_id = CAST(:uid AS uuid)").bindparams(
+            uid=LOCAL_USER_ID
         )
     )
     op.execute(
-        sa.text("UPDATE memories SET user_id = :uid").bindparams(
-            uid=sa.cast(sa.literal(LOCAL_USER_ID), sa.Uuid())
+        sa.text("UPDATE memories SET user_id = CAST(:uid AS uuid)").bindparams(
+            uid=LOCAL_USER_ID
         )
     )
     op.execute(
