@@ -148,7 +148,11 @@ class Settings(BaseSettings):
     memory_injection_flag_enabled: bool = True
 
     # HTTP hardening.
-    cors_allowed_origins: str = "http://localhost:5173,http://localhost:5174"
+    # Vite serves on either host spelling, and they are distinct CORS origins.
+    cors_allowed_origins: str = (
+        "http://localhost:5173,http://localhost:5174,"
+        "http://127.0.0.1:5173,http://127.0.0.1:5174"
+    )
     cors_allow_credentials: bool = True
     max_request_body_bytes: int = 262_144
     security_headers_enabled: bool = True
