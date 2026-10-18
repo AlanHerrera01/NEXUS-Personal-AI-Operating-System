@@ -1,29 +1,24 @@
 import { apiClient } from './apiClient';
-import type { AgentRun, AgentAction } from '../../types';
+import type { AgentRunResponse, PermissionDecision } from '../../types';
 
+/**
+ * Agent run endpoints.
+ *
+ * Note the shape: a run is created *under an agent*
+ * (`POST /api/v1/agents/{agent_id}/runs`) and then addressed by its own id
+ * (`/api/v1/agents/runs/{run_id}`). There is deliberately no "list every run"
+ * route -- the dashboard surfaces the caller's active runs through
+ * `/api/v1/overview` instead.
+ */
 export const agentApi = {
-  // Create agent run
-  createRun: async (request: string) => {
-    return apiClient.post<{ id: string }>('/api/v1/agent-runs', { user_request: request });
-  },
+  createRun: (agentId: string, input: string) =>
+    apiClient.post<AgentRunResponse>(`/api/v1/agents/${agentId}/runs`, { input }),
 
-  // Get agent run
-  getRun: async (runId: string) => {
-    return apiClient.get<AgentRun>(`/api/v1/agent-runs/${runId}`);
-  },
+  getRun: (runId: string) =>
+    apiClient.get<AgentRunResponse>(`/api/v1/agents/runs/${runId}`),
 
-  // List agent runs
-  listRuns: async () => {
-    return apiClient.get<AgentRun[]>('/api/v1/agent-runs');
-  },
-
-  // Resume agent run (approve/reject)
-  resumeRun: async (runId: string, allow: boolean) => {
-    return apiClient.post<{ response: string }>(`/api/v1/agent-runs/${runId}/resume`, { allow });
-  },
-
-  // Get agent actions for a run
-  getActions: async (runId: string) => {
-    return apiClient.get<AgentAction[]>(`/api/v1/agent-runs/${runId}/actions`);
-  },
+  // Resuming answers the ASK the run is parked on. `ALLOW` lets the pending
+  // action execute; `DENY` lets the run observe the refusal and finish.
+  resumeRun: (runId: string, permission: PermissionDecision) =>
+    apiClient.post<AgentRunResponse>(`/api/v1/agents/runs/${runId}/resume`, { permission }),
 };

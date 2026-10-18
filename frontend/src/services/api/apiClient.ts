@@ -1,4 +1,14 @@
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000';
+// The backend serves every route under the origin root (e.g.
+// `http://localhost:8000/api/v1/overview`), so the base is the origin only.
+export const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000';
+
+/** Thrown when the API cannot be reached at all (offline, CORS, refused). */
+export class ApiNetworkError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'ApiNetworkError';
+  }
+}
 
 export class ApiError extends Error {
   public status: number;
@@ -17,14 +27,23 @@ async function apiRequest<T>(
   options: RequestInit = {}
 ): Promise<T> {
   const url = `${API_BASE_URL}${endpoint}`;
-  
-  const response = await fetch(url, {
-    ...options,
-    headers: {
-      'Content-Type': 'application/json',
-      ...options.headers,
-    },
-  });
+
+  let response: Response;
+  try {
+    response = await fetch(url, {
+      ...options,
+      headers: {
+        'Content-Type': 'application/json',
+        ...options.headers,
+      },
+    });
+  } catch {
+    // "The backend is not reachable" is a very different operator message than
+    // "the backend said no", so it gets its own error type.
+    throw new ApiNetworkError(
+      `No se pudo conectar con el backend en ${API_BASE_URL}. ¿Está el servidor en marcha?`
+    );
+  }
 
   if (!response.ok) {
     let message = 'An error occurred';

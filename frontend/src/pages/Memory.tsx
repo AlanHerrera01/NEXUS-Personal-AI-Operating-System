@@ -1,8 +1,605 @@
+import { useState, type FormEvent } from 'react';
+import { useAsyncData } from '../hooks/useAsyncData';
+import { useOverview } from '../hooks/useOverview';
+import { memoryApi } from '../services/api/memoryApi';
+import { ApiError } from '../services/api/apiClient';
+import { EmptyRow, ErrorRow, LoadingRow } from '../components/ui/PageShell';
+import type { MemoryDetail, MemoryImportance, MemoryType } from '../types';
+
+type TypeFilter = 'ALL' | MemoryType;
+
+interface TypeMeta {
+  label: string;
+  badge: string;
+  bar: string;
+  count: string;
+}
+
+const TYPE_META: Record<MemoryType, TypeMeta> = {
+  PREFERENCE: { label: 'PREFERENCIA', badge: 'bg-primary/10 text-primary', bar: 'bg-primary', count: 'text-primary' },
+  SEMANTIC: { label: 'SEMÁNTICA', badge: 'bg-secondary/10 text-secondary', bar: 'bg-secondary', count: 'text-secondary' },
+  EPISODIC: { label: 'EPISÓDICA', badge: 'bg-tertiary/10 text-tertiary', bar: 'bg-tertiary', count: 'text-tertiary' },
+};
+
+/** Persist the currently loaded memories as newline-delimited JSON. */
+function downloadJsonl(items: MemoryDetail[], agentId: string | null) {
+  if (items.length === 0) return;
+  const blob = new Blob([items.map((item) => JSON.stringify(item)).join('\n')], {
+    type: 'application/x-ndjson',
+  });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement('a');
+  anchor.href = url;
+  anchor.download = `nexus-memories-${agentId?.slice(0, 8) ?? 'agent'}.jsonl`;
+  anchor.click();
+  URL.revokeObjectURL(url);
+}
+
 export default function Memory() {
+  const { data: overview, connected } = useOverview();
+  const agentId = overview?.agent?.id ?? null;
+
+  const [refreshKey, setRefreshKey] = useState(0);
+  const [typeFilter, setTypeFilter] = useState<TypeFilter>('ALL');
+  const [query, setQuery] = useState('');
+  const [results, setResults] = useState<MemoryDetail[] | null>(null);
+  const [searching, setSearching] = useState(false);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [showNew, setShowNew] = useState(false);
+
+  const [draft, setDraft] = useState<{
+    content: string;
+    type: MemoryType;
+    importance: MemoryImportance;
+  }>({ content: '', type: 'SEMANTIC', importance: 'MEDIUM' });
+  const [saving, setSaving] = useState(false);
+
+  const reload = () => setRefreshKey((key) => key + 1);
+
+  const memories = useAsyncData(
+    () => (agentId ? memoryApi.listMemories(agentId) : Promise.resolve<MemoryDetail[]>([])),
+    [agentId, refreshKey],
+  );
+
+  const items = memories.data ?? [];
+  const base = results ?? items;
+  const visible = typeFilter === 'ALL' ? base : base.filter((item) => item.memory_type === typeFilter);
+
+  const counts = {
+    EPISODIC: items.filter((item) => item.memory_type === 'EPISODIC').length,
+    SEMANTIC: items.filter((item) => item.memory_type === 'SEMANTIC').length,
+    PREFERENCE: items.filter((item) => item.memory_type === 'PREFERENCE').length,
+  };
+
+  const runSearch = async () => {
+    if (!agentId || query.trim() === '') {
+      setResults(null);
+      return;
+    }
+    setSearching(true);
+    setActionError(null);
+    try {
+      setResults(await memoryApi.searchMemories(agentId, query.trim()));
+    } catch (caught) {
+      setActionError(caught instanceof ApiError ? caught.message : 'La búsqueda ha fallado.');
+    } finally {
+      setSearching(false);
+    }
+  };
+
+  const clearSearch = () => {
+    setResults(null);
+    setQuery('');
+  };
+
+  const save = async (event: FormEvent) => {
+    event.preventDefault();
+    if (!agentId || draft.content.trim() === '') return;
+    setSaving(true);
+    setActionError(null);
+    try {
+      await memoryApi.saveMemory({
+        agent_id: agentId,
+        content: draft.content.trim(),
+        memory_type: draft.type,
+        source: 'USER_EXPLICIT',
+        importance: draft.importance,
+      });
+      setDraft({ content: '', type: 'SEMANTIC', importance: 'MEDIUM' });
+      setShowNew(false);
+      setResults(null);
+      reload();
+    } catch (caught) {
+      setActionError(caught instanceof ApiError ? caught.message : 'No se pudo guardar el recuerdo.');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const remove = async (memoryId: string) => {
+    if (!agentId) return;
+    setBusy(memoryId);
+    setActionError(null);
+    try {
+      await memoryApi.deleteMemory(memoryId, agentId);
+      setResults((prev) => prev?.filter((item) => item.id !== memoryId) ?? null);
+      reload();
+    } catch (caught) {
+      setActionError(caught instanceof ApiError ? caught.message : 'No se pudo eliminar el recuerdo.');
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const clearAll = async () => {
+    if (!agentId) return;
+    if (!window.confirm('¿Eliminar todos los recuerdos de este agente? Es irreversible.')) return;
+    setActionError(null);
+    try {
+      await memoryApi.clearMemories(agentId);
+      setResults(null);
+      reload();
+    } catch (caught) {
+      setActionError(caught instanceof ApiError ? caught.message : 'No se pudo limpiar la memoria.');
+    }
+  };
+
+  const tabs: { key: TypeFilter; label: string; count: number; tone: string }[] = [
+    { key: 'ALL', label: 'Todos', count: items.length, tone: 'text-on-surface-variant' },
+    { key: 'EPISODIC', label: 'Episódica', count: counts.EPISODIC, tone: TYPE_META.EPISODIC.count },
+    { key: 'SEMANTIC', label: 'Semántica', count: counts.SEMANTIC, tone: TYPE_META.SEMANTIC.count },
+    { key: 'PREFERENCE', label: 'Preferencias', count: counts.PREFERENCE, tone: TYPE_META.PREFERENCE.count },
+  ];
+
   return (
-    <div className="p-6">
-      <h1 className="text-2xl font-bold mb-4">Memory</h1>
-      <p className="text-gray-600">Memory management coming soon...</p>
+    <div className="flex flex-col w-full">
+      {/* Header + metric ribbon with ambient glow */}
+      <div className="relative w-full overflow-hidden">
+        <div className="absolute -top-32 left-1/4 w-[500px] h-[250px] bg-primary/5 blur-[120px] pointer-events-none rounded-full" />
+        <div className="absolute top-20 right-10 w-[380px] h-[180px] bg-secondary/5 blur-[100px] pointer-events-none rounded-full" />
+
+        <div className="relative px-margin pt-space-lg pb-space-md flex flex-col gap-space-md max-w-[1720px] mx-auto w-full">
+          <div className="flex flex-col xl:flex-row xl:items-center justify-between gap-space-md">
+            <div className="flex flex-col gap-1">
+              <div className="flex items-center gap-space-xs font-label-mono-xs text-label-mono-xs text-outline flex-wrap">
+                <span className="text-tertiary font-semibold tracking-wider uppercase">NEXUS CORE OS</span>
+                <span>/</span>
+                <span className="text-on-surface-variant uppercase">LONG-TERM MEMORY SUBSYSTEM</span>
+                <span>/</span>
+                <span className="text-secondary font-mono">pgvector</span>
+              </div>
+              <div className="flex items-baseline gap-space-md flex-wrap mt-0.5">
+                <h1 className="font-headline-lg text-headline-lg text-on-surface tracking-tight font-semibold">
+                  Gestión de Memoria
+                </h1>
+                <span className="font-body-md text-body-md text-on-surface-variant">
+                  Inspecciona, filtra y audita los recuerdos persistentes del sistema.
+                </span>
+              </div>
+            </div>
+
+            {/* Firewall banner */}
+            <div className="bg-surface-container-low px-space-md py-space-sm rounded-lg flex items-center justify-between gap-space-lg shadow-sm">
+              <div className="flex items-center gap-space-sm">
+                <div className="relative flex items-center justify-center w-7 h-7 rounded bg-tertiary-container/20 text-tertiary flex-shrink-0">
+                  <span className="material-symbols-outlined text-[18px]">verified_user</span>
+                  {connected && (
+                    <span className="absolute -top-0.5 -right-0.5 w-2 h-2 rounded-full bg-tertiary animate-ping" />
+                  )}
+                </div>
+                <div className="flex flex-col">
+                  <div className="flex items-center gap-space-xs">
+                    <span className="font-label-mono-xs text-label-mono-xs text-tertiary font-semibold tracking-wider">
+                      MEMORY FIREWALL: {connected ? 'ACTIVO' : 'SIN CONEXIÓN'}
+                    </span>
+                    <span className="font-label-mono-xs text-label-mono-xs bg-surface-container-high px-1.5 rounded text-outline font-mono">
+                      TRUST {overview?.trust.default_decision ?? '--'}
+                    </span>
+                  </div>
+                  <span className="font-body-sm text-body-sm text-outline">
+                    Sanitización de secretos y detección de inyección antes de persistir.
+                  </span>
+                </div>
+              </div>
+              <span className="hidden sm:flex font-label-mono-xs text-label-mono-xs px-space-xs py-1 bg-surface-container rounded text-tertiary font-mono whitespace-nowrap">
+                {agentId ? `AGENT ${agentId.slice(0, 8)}` : 'SIN AGENTE'}
+              </span>
+            </div>
+          </div>
+
+          {/* Metric ribbon — every node is a real value */}
+          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-space-sm mt-space-xs">
+            <MetricNode label="Recuerdos" icon="scatter_plot" tone="text-primary" value={items.length} caption="cargados (máx 100)" />
+            <MetricNode label="Episódicos" icon="history" tone="text-tertiary" value={counts.EPISODIC} caption="EPISODIC" />
+            <MetricNode label="Semánticos" icon="hub" tone="text-secondary" value={counts.SEMANTIC} caption="SEMANTIC" />
+            <MetricNode label="Preferencias" icon="tune" tone="text-primary-container" value={counts.PREFERENCE} caption="PREFERENCE" />
+            <MetricNode
+              label="Motor PGVector"
+              icon="database"
+              tone={connected ? 'text-tertiary' : 'text-error'}
+              value={connected ? 'Conectado' : 'Sin conexión'}
+              caption={overview?.system.database ? `DB ${overview.system.database}` : '--'}
+            />
+          </div>
+        </div>
+      </div>
+
+      {/* Search, filters and actions */}
+      <div className="px-margin py-space-sm max-w-[1720px] mx-auto w-full">
+        <div className="bg-surface-container-low p-space-sm rounded-lg flex flex-col lg:flex-row lg:items-center justify-between gap-space-sm shadow-sm">
+          <div className="relative flex-1 min-w-[280px]">
+            <span className="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-outline text-[18px]">
+              search
+            </span>
+            <input
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter') void runSearch();
+              }}
+              placeholder="Buscar en memoria semántica por concepto…"
+              className="w-full bg-surface-container-lowest text-on-surface font-body-sm text-body-sm pl-9 pr-14 py-2 rounded focus:outline-none focus:bg-surface-container transition-colors placeholder:text-outline"
+            />
+            <kbd className="absolute right-2.5 top-1/2 -translate-y-1/2 font-label-mono-xs text-label-mono-xs bg-surface-container-high px-1.5 py-0.5 rounded text-outline font-mono">
+              ⏎
+            </kbd>
+          </div>
+
+          <div className="flex items-center justify-between lg:justify-end gap-space-sm flex-wrap">
+            <div className="flex items-center gap-1 bg-surface-container-lowest p-1 rounded">
+              {tabs.map((tab) => (
+                <button
+                  key={tab.key}
+                  type="button"
+                  onClick={() => setTypeFilter(tab.key)}
+                  className={`px-space-sm py-1 rounded font-label-mono-sm text-label-mono-sm flex items-center gap-1.5 transition-all ${
+                    typeFilter === tab.key
+                      ? 'bg-surface-container text-on-surface font-medium'
+                      : 'hover:bg-surface-container/60 text-on-surface-variant hover:text-on-surface'
+                  }`}
+                >
+                  <span>{tab.label}</span>
+                  <span className={`bg-surface-container-high px-1.5 rounded font-mono text-[10px] ${tab.tone}`}>
+                    {tab.count}
+                  </span>
+                </button>
+              ))}
+            </div>
+            <div className="flex items-center gap-space-xs">
+              <button
+                type="button"
+                disabled={searching}
+                onClick={() => void runSearch()}
+                className="bg-primary text-on-primary hover:bg-primary-container disabled:opacity-50 px-space-sm py-1.5 rounded font-body-sm text-body-sm font-medium transition-colors"
+              >
+                {searching ? 'Buscando…' : 'Buscar'}
+              </button>
+              {results && (
+                <button
+                  type="button"
+                  onClick={clearSearch}
+                  className="bg-surface-container-lowest hover:bg-surface-container px-space-sm py-1.5 rounded text-on-surface-variant hover:text-on-surface font-body-sm text-body-sm transition-colors"
+                >
+                  Limpiar
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={reload}
+                className="bg-surface-container-lowest hover:bg-surface-container px-space-sm py-1.5 rounded text-on-surface-variant hover:text-on-surface font-body-sm text-body-sm flex items-center gap-1 transition-colors"
+              >
+                <span className="material-symbols-outlined text-[16px]">refresh</span>
+                Recargar
+              </button>
+              <button
+                type="button"
+                onClick={() => downloadJsonl(items, agentId)}
+                disabled={items.length === 0}
+                className="bg-surface-container-lowest hover:bg-surface-container disabled:opacity-50 px-space-sm py-1.5 rounded text-secondary flex items-center gap-1 font-body-sm text-body-sm transition-colors"
+              >
+                <span className="material-symbols-outlined text-[16px]">download</span>
+                Exportar
+              </button>
+              <button
+                type="button"
+                onClick={() => setShowNew((value) => !value)}
+                disabled={!agentId}
+                className="bg-surface-container-lowest hover:bg-surface-container disabled:opacity-50 px-space-sm py-1.5 rounded text-primary flex items-center gap-1 font-body-sm text-body-sm transition-colors"
+              >
+                <span className="material-symbols-outlined text-[16px]">add</span>
+                Nuevo
+              </button>
+            </div>
+          </div>
+        </div>
+
+        {actionError && (
+          <div className="mt-space-sm">
+            <ErrorRow message={actionError} />
+          </div>
+        )}
+      </div>
+
+      {/* Work area */}
+      <div className="px-margin py-space-sm pb-space-xl max-w-[1720px] mx-auto w-full grid grid-cols-1 lg:grid-cols-12 gap-space-md">
+        {/* Records stream */}
+        <div className="lg:col-span-8 flex flex-col gap-space-sm min-w-0">
+          {showNew && (
+            <form
+              onSubmit={save}
+              className="bg-surface-container-low rounded-lg p-space-md flex flex-col gap-space-sm shadow-sm"
+            >
+              <span className="font-label-mono-xs text-label-mono-xs text-outline uppercase tracking-wider">
+                Registrar Recuerdo
+              </span>
+              <textarea
+                value={draft.content}
+                onChange={(event) => setDraft({ ...draft, content: event.target.value })}
+                rows={2}
+                placeholder="Qué debe recordar el agente…"
+                className="bg-surface-container-lowest rounded px-space-sm py-2 font-body-sm text-body-sm text-on-surface outline-none focus:ring-1 focus:ring-primary resize-none"
+              />
+              <div className="flex flex-wrap items-center gap-space-sm">
+                <select
+                  value={draft.type}
+                  onChange={(event) => setDraft({ ...draft, type: event.target.value as MemoryType })}
+                  className="bg-surface-container-lowest rounded px-space-sm py-1 font-code-base text-code-base text-on-surface outline-none focus:ring-1 focus:ring-primary"
+                >
+                  <option value="EPISODIC">EPISODIC</option>
+                  <option value="SEMANTIC">SEMANTIC</option>
+                  <option value="PREFERENCE">PREFERENCE</option>
+                </select>
+                <select
+                  value={draft.importance}
+                  onChange={(event) =>
+                    setDraft({ ...draft, importance: event.target.value as MemoryImportance })
+                  }
+                  className="bg-surface-container-lowest rounded px-space-sm py-1 font-code-base text-code-base text-on-surface outline-none focus:ring-1 focus:ring-primary"
+                >
+                  <option value="LOW">LOW</option>
+                  <option value="MEDIUM">MEDIUM</option>
+                  <option value="HIGH">HIGH</option>
+                </select>
+                <button
+                  type="submit"
+                  disabled={saving || draft.content.trim() === ''}
+                  className="bg-primary text-on-primary hover:bg-primary-container disabled:opacity-50 rounded px-space-md py-1.5 font-body-sm text-body-sm font-medium transition-colors"
+                >
+                  {saving ? 'Guardando…' : 'Guardar'}
+                </button>
+              </div>
+            </form>
+          )}
+
+          <div className="flex items-center justify-between px-space-xs">
+            <div className="flex items-center gap-space-xs font-label-mono-xs text-label-mono-xs text-outline uppercase tracking-wider">
+              <span className="material-symbols-outlined text-[15px] text-secondary">memory</span>
+              <span>
+                {results ? 'Resultados de búsqueda' : 'Registros sincronizados'} (mostrando {visible.length} de{' '}
+                {items.length})
+              </span>
+            </div>
+            <div className="flex items-center gap-space-xs font-label-mono-xs text-label-mono-xs text-tertiary">
+              <span className={`w-1.5 h-1.5 rounded-full ${connected ? 'bg-tertiary' : 'bg-error'}`} />
+              <span>{connected ? 'Backend en línea' : 'Sin conexión'}</span>
+            </div>
+          </div>
+
+          {!agentId ? (
+            <EmptyRow message="No hay un agente activo. La memoria está scoped a un agente, así que aparece cuando exista uno." />
+          ) : memories.loading && !results ? (
+            <LoadingRow label="Cargando recuerdos…" />
+          ) : memories.error && !results ? (
+            <ErrorRow message={memories.error} onRetry={reload} />
+          ) : visible.length === 0 ? (
+            <EmptyRow
+              message={
+                results
+                  ? 'Sin coincidencias para la búsqueda.'
+                  : typeFilter === 'ALL'
+                    ? 'Este agente aún no tiene recuerdos.'
+                    : 'No hay recuerdos de este tipo.'
+              }
+            />
+          ) : (
+            visible.map((memory) => {
+              const meta = TYPE_META[memory.memory_type as MemoryType] ?? TYPE_META.SEMANTIC;
+              return (
+                <div
+                  key={memory.id}
+                  className="bg-surface-container-low rounded-lg p-space-md flex flex-col justify-between hover:bg-surface-container/70 transition-all shadow-sm"
+                >
+                  <div className="flex flex-col gap-space-sm">
+                    <div className="flex items-center justify-between flex-wrap gap-space-xs">
+                      <div className="flex items-center gap-space-xs">
+                        <span
+                          className={`px-2 py-0.5 rounded font-label-mono-xs text-label-mono-xs font-medium uppercase ${meta.badge}`}
+                        >
+                          {meta.label}
+                        </span>
+                        <span className="font-code-base text-code-base text-on-surface font-medium">
+                          {memory.id.slice(0, 8)}
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-space-xs">
+                        <span className="px-1.5 py-0.5 rounded bg-surface-container-lowest font-label-mono-xs text-label-mono-xs text-on-surface-variant font-mono">
+                          IMPORTANCIA: {memory.importance}
+                        </span>
+                        <span className="px-1.5 py-0.5 rounded bg-surface-container-lowest font-label-mono-xs text-label-mono-xs text-on-surface-variant font-mono">
+                          {memory.persistence_decision}
+                        </span>
+                      </div>
+                    </div>
+
+                    <p className="font-body-md text-body-md text-on-surface leading-relaxed pl-1 whitespace-pre-wrap">
+                      {memory.content}
+                    </p>
+
+                    <div className="bg-surface-container-lowest/80 rounded p-space-xs px-space-sm flex items-center justify-between text-on-surface-variant font-label-mono-xs text-label-mono-xs flex-wrap gap-space-xs">
+                      <div className="flex items-center gap-2">
+                        <span className="text-outline">Origen:</span>
+                        <span className="text-on-surface">{memory.source}</span>
+                      </div>
+                      <div className="flex items-center gap-1 text-tertiary">
+                        <span className="material-symbols-outlined text-[14px]">lock_reset</span>
+                        <span>{memory.persistence_decision === 'SAVE' ? 'Persistido' : 'No persistido'}</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="mt-space-md pt-space-xs flex items-center justify-between">
+                    <span className="font-label-mono-xs text-label-mono-xs text-outline">
+                      AGENT {memory.agent_id.slice(0, 8)}
+                    </span>
+                    <button
+                      type="button"
+                      disabled={busy === memory.id}
+                      onClick={() => void remove(memory.id)}
+                      className="bg-surface-container hover:bg-error-container text-on-surface-variant hover:text-error disabled:opacity-50 px-space-sm py-1 rounded font-body-sm text-body-sm flex items-center gap-1 transition-colors"
+                    >
+                      <span className="material-symbols-outlined text-[15px]">delete</span>
+                      <span>Eliminar</span>
+                    </button>
+                  </div>
+                </div>
+              );
+            })
+          )}
+        </div>
+
+        {/* Security, telemetry & auditing */}
+        <div className="lg:col-span-4 flex flex-col gap-space-md">
+          {/* Firewall policy */}
+          <div className="bg-surface-container-low rounded-lg p-space-md flex flex-col gap-space-md shadow-sm">
+            <div className="flex items-center gap-space-xs text-secondary font-label-mono-xs text-label-mono-xs font-semibold tracking-wider uppercase">
+              <span className="material-symbols-outlined text-[16px]">shield_with_heart</span>
+              <span>POLÍTICA DE SEGURIDAD Y PRIVACIDAD</span>
+            </div>
+            <div className="flex flex-col gap-space-xs">
+              <h3 className="font-headline-sm text-headline-sm text-on-surface font-semibold tracking-tight leading-snug">
+                Nexus Memory Firewall
+              </h3>
+              <p className="font-body-sm text-body-sm text-on-surface-variant leading-relaxed">
+                Ninguna memoria persistente se consolida sin pasar el filtro de desinfección de
+                secretos y la heurística anti-inyección (
+                <span className="font-code-base text-code-base text-secondary">jailbreak / prompt leakage</span>
+                ) del backend. La escritura directa del operador se marca como explícita.
+              </p>
+            </div>
+            <div className="bg-surface-container-lowest p-space-sm rounded flex flex-col gap-space-xs">
+              <div className="flex items-center justify-between text-on-surface">
+                <span className="font-label-mono-xs text-label-mono-xs font-medium">
+                  Política de decisión
+                </span>
+                <span className="font-label-mono-xs text-label-mono-xs text-tertiary font-mono">
+                  {overview?.trust.default_decision ?? '--'}
+                </span>
+              </div>
+              <div className="flex items-center justify-between text-on-surface-variant">
+                <span className="font-label-mono-xs text-label-mono-xs">Persistencia solicitada</span>
+                <span className="font-label-mono-xs text-label-mono-xs font-mono">
+                  SAVE / DO_NOT_SAVE
+                </span>
+              </div>
+            </div>
+          </div>
+
+          {/* Storage layer */}
+          <div className="relative rounded-lg overflow-hidden h-36 bg-surface-container-lowest flex items-end">
+            <div className="absolute inset-0 bg-gradient-to-br from-primary/20 via-surface-container to-secondary/10" />
+            <span className="material-symbols-outlined absolute right-4 top-4 text-[64px] text-primary/20">
+              database
+            </span>
+            <div className="relative p-space-sm flex flex-col">
+              <span className="font-label-mono-xs text-label-mono-xs text-outline uppercase font-mono">
+                Hardware Storage Layer
+              </span>
+              <span className="font-body-sm text-body-sm text-on-surface font-semibold">
+                Postgres + pgvector
+              </span>
+              <span className="font-label-mono-xs text-label-mono-xs text-on-surface-variant">
+                {overview?.system.database === 'up'
+                  ? 'Base de datos conectada'
+                  : 'Base de datos no disponible'}
+              </span>
+            </div>
+          </div>
+
+          {/* Operations */}
+          <div className="flex flex-col gap-1 pt-space-xs">
+            <button
+              type="button"
+              onClick={() => downloadJsonl(items, agentId)}
+              disabled={items.length === 0}
+              className="flex items-center justify-between p-space-xs rounded hover:bg-surface-container text-on-surface hover:text-secondary disabled:opacity-50 transition-colors group"
+            >
+              <div className="flex items-center gap-space-xs">
+                <span className="material-symbols-outlined text-[16px] text-outline group-hover:text-secondary transition-colors">
+                  file_download
+                </span>
+                <span className="font-body-sm text-body-sm">Descargar recuerdos (.jsonl)</span>
+              </div>
+              <span className="material-symbols-outlined text-[16px] text-outline">chevron_right</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => void clearAll()}
+              disabled={!agentId || items.length === 0}
+              className="flex items-center justify-between p-space-xs rounded hover:bg-surface-container text-on-surface hover:text-error disabled:opacity-50 transition-colors group"
+            >
+              <div className="flex items-center gap-space-xs">
+                <span className="material-symbols-outlined text-[16px] text-outline group-hover:text-error transition-colors">
+                  delete_sweep
+                </span>
+                <span className="font-body-sm text-body-sm">Limpiar memoria del agente</span>
+              </div>
+              <span className="font-label-mono-xs text-label-mono-xs bg-surface-container px-1 rounded text-outline font-mono">
+                {items.length}
+              </span>
+            </button>
+          </div>
+
+          {/* Firewall live log (not exposed by the backend) */}
+          <div className="bg-surface-container-low rounded-lg p-space-md flex flex-col gap-space-sm shadow-sm">
+            <div className="flex items-center justify-between">
+              <span className="font-label-mono-xs text-label-mono-xs text-outline uppercase tracking-wider font-semibold">
+                Live Firewall Log
+              </span>
+              <span className="font-label-mono-xs text-label-mono-xs text-outline font-mono">NO EXPUESTO</span>
+            </div>
+            <div className="bg-surface-container-lowest p-space-sm rounded">
+              <span className="font-label-mono-xs text-label-mono-xs text-outline leading-5 block">
+                El backend no expone un flujo de eventos del firewall de memoria en tiempo real.
+                Las decisiones de persistencia se ven por recuerdo en cada tarjeta.
+              </span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+interface MetricNodeProps {
+  label: string;
+  icon: string;
+  tone: string;
+  value: string | number;
+  caption: string;
+}
+
+function MetricNode({ label, icon, tone, value, caption }: MetricNodeProps) {
+  return (
+    <div className="bg-surface-container-low p-space-sm rounded-lg flex flex-col justify-between hover:bg-surface-container transition-colors shadow-sm">
+      <div className="flex items-center justify-between text-outline">
+        <span className="font-label-mono-xs text-label-mono-xs uppercase tracking-wider">{label}</span>
+        <span className={`material-symbols-outlined text-[15px] ${tone}`}>{icon}</span>
+      </div>
+      <div className="mt-space-xs flex items-baseline gap-space-xs">
+        <span className={`font-headline-sm text-headline-sm font-semibold ${tone}`}>{value}</span>
+      </div>
+      <span className="font-label-mono-xs text-label-mono-xs text-outline font-mono">{caption}</span>
     </div>
   );
 }

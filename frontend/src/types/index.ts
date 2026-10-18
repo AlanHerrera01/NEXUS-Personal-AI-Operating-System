@@ -149,6 +149,8 @@ export interface MCPServer {
   name: string;
   description: string;
   transport_type: MCPTransportType;
+  /** False when the transport is registered but the current adapter cannot reach it. */
+  transport_supported: boolean;
   endpoint: string;
   configuration: Record<string, unknown>;
   enabled: boolean;
@@ -288,4 +290,283 @@ export interface ProactiveEvaluation {
   rule_name: string;
   eligible: boolean;
   reason: string;
+}
+
+// ---------------------------------------------------------------------------
+// Backend read models (mirror app/presentation/schemas)
+// ---------------------------------------------------------------------------
+
+// GET /api/v1/overview
+export interface OverviewSystemHealth {
+  status: string;
+  database: string;
+  environment: string;
+  uptime_seconds: number;
+}
+
+export interface OverviewModel {
+  provider: string;
+  model: string;
+  configured: boolean;
+}
+
+export interface OverviewRuntime {
+  available: boolean;
+  provider: string;
+  detail: string;
+}
+
+export interface OverviewTrust {
+  default_decision: string;
+  allow_grants: number;
+  ask_grants: number;
+  deny_grants: number;
+  total_grants: number;
+}
+
+export interface OverviewRun {
+  run_id: string;
+  status: AgentRunStatus | string;
+  user_request: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface OverviewRuns {
+  active_count: number;
+  items: OverviewRun[];
+}
+
+export interface OverviewAuthorization {
+  request_id: string;
+  agent_run_id: string;
+  tool_name: string;
+  skill_name: string;
+  reason: string;
+  risk_level: RiskLevel;
+  created_at: string;
+  expires_at: string;
+}
+
+export interface OverviewAuthorizations {
+  pending_count: number;
+  items: OverviewAuthorization[];
+}
+
+export interface OverviewAgent {
+  id: string;
+  name: string;
+}
+
+export interface Overview {
+  system: OverviewSystemHealth;
+  model: OverviewModel;
+  runtime: OverviewRuntime;
+  trust: OverviewTrust;
+  runs: OverviewRuns;
+  authorizations: OverviewAuthorizations;
+  agent: OverviewAgent | null;
+}
+
+// GET /api/v1/health and GET /api/v1/health/llm
+export interface HealthResponse {
+  status: string;
+  service: string;
+  phase: string;
+  database: string;
+}
+
+export interface LLMHealthResponse {
+  provider: string;
+  configured: boolean;
+}
+
+// GET /api/v1/runtime/health
+export interface RuntimeHealth {
+  available: boolean;
+  provider: string;
+  detail: string;
+  version: string | null;
+}
+
+// GET /api/v1/skills and GET /api/v1/tools
+export interface SkillView {
+  name: string;
+  description: string;
+  version: string;
+  enabled: boolean;
+  category: string | null;
+  keywords: string[];
+  tools: string[];
+}
+
+export interface ToolView {
+  name: string;
+  skill: string;
+  description: string;
+  risk_level: RiskLevel;
+  read_only: boolean;
+  side_effect: boolean;
+  requires_confirmation: boolean;
+  category: string | null;
+  version: string;
+  input_schema: Record<string, unknown>;
+}
+
+// POST /api/v1/agents/{agent_id}/runs and GET /api/v1/agents/runs/{run_id}
+export interface AgentActionResponse {
+  tool_name: string;
+  status: string;
+  arguments: Record<string, unknown>;
+}
+
+export interface AgentRunResponse {
+  run_id: string;
+  status: string;
+  response?: string | null;
+  question?: string | null;
+  actions: AgentActionResponse[];
+}
+
+// POST /api/v1/llm/generate
+export interface LLMTokenUsage {
+  prompt_tokens: number | null;
+  completion_tokens: number | null;
+  total_tokens: number | null;
+}
+
+export interface LLMGenerateResponse {
+  content: string;
+  model: string;
+  usage: LLMTokenUsage | null;
+  finish_reason: string | null;
+}
+
+// Memories (GET/POST /api/v1/memories)
+export interface MemoryDetail {
+  id: string;
+  agent_id: string;
+  content: string;
+  memory_type: string;
+  source: string;
+  importance: string;
+  persistence_decision: string;
+}
+
+export interface MemoryListResponse {
+  items: MemoryDetail[];
+}
+
+export interface MemoryDecisionResponse {
+  saved: boolean;
+  decision: string;
+  reason: string;
+  memory: MemoryDetail | null;
+}
+
+// GET / PATCH /api/v1/settings
+export interface SettingsProvider {
+  name: string;
+  api_key_configured: boolean;
+  base_url_configured: boolean;
+}
+
+export interface RuntimeSettings {
+  model: string;
+  temperature: number;
+  max_tokens: number;
+  request_timeout_seconds: number;
+  notifications_enabled: boolean;
+  /** Environment values each override falls back to, keyed by field name. */
+  defaults: Record<string, unknown>;
+  /** Field names that currently carry a saved override. */
+  overridden: string[];
+  provider: SettingsProvider;
+  trust_default_decision: string;
+  trust_editable: boolean;
+  memory_firewall_enforced: boolean;
+  memory_firewall_editable: boolean;
+  environment: string;
+  updated_at: string | null;
+  /** False when the override store could not be read. */
+  storage_available: boolean;
+}
+
+/**
+ * A partial update. Omit a field to leave it alone; send `null` to clear the
+ * override and fall back to the environment value.
+ */
+export interface RuntimeSettingsUpdate {
+  model?: string | null;
+  temperature?: number | null;
+  max_tokens?: number | null;
+  request_timeout_seconds?: number | null;
+  notifications_enabled?: boolean | null;
+}
+
+// GET /api/v1/activity
+export type ActivityWindow = 'today' | '24h' | '7d' | 'all';
+export type ActivityCategory = 'TOOL' | 'TRUST' | 'MEMORY' | 'RUN' | 'SYSTEM';
+export type ActivityOutcome = 'SUCCESS' | 'DENIED' | 'PENDING' | 'ERROR' | 'INFO';
+
+/**
+ * One entry in the merged audit feed. The backend joins real, owner-scoped
+ * sources (audit decisions, permission requests, runs, actions, memories) --
+ * nothing here is synthesised for display.
+ */
+export interface ActivityEvent {
+  id: string;
+  timestamp: string;
+  category: ActivityCategory | string;
+  kind: string;
+  outcome: ActivityOutcome | string;
+  title: string;
+  detail: string;
+  source: string | null;
+  reference: string | null;
+  agent_run_id: string | null;
+  risk_level: RiskLevel | string | null;
+  decision: string | null;
+  payload: Record<string, unknown>;
+}
+
+export interface ActivityCategoryCount {
+  category: string;
+  label: string;
+  count: number;
+}
+
+export interface ActivitySummary {
+  total: number;
+  success: number;
+  denied: number;
+  pending: number;
+  error: number;
+  info: number;
+  resolved: number;
+  /** `success / resolved`, or null when nothing in the window reached a verdict. */
+  success_rate: number | null;
+  categories: ActivityCategoryCount[];
+  density: number[];
+  density_peak: number;
+  bucket_seconds: number;
+}
+
+/** The in-memory authorisation ring: bounded, lost on restart, not an archive. */
+export interface ActivityAuditTrail {
+  persisted: boolean;
+  retention_capacity: number;
+  retained_entries: number;
+  visible_entries: number;
+  note: string;
+}
+
+export interface ActivityFeed {
+  generated_at: string;
+  window: string;
+  storage_available: boolean;
+  truncated: boolean;
+  events: ActivityEvent[];
+  summary: ActivitySummary;
+  audit: ActivityAuditTrail;
 }

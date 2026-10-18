@@ -10,6 +10,12 @@ interface PermissionDialogProps {
   onClose?: () => void;
 }
 
+function riskTone(risk: string): string {
+  if (risk === 'HIGH') return 'bg-error-container/30 text-error border-error/40';
+  if (risk === 'MEDIUM') return 'bg-primary/10 text-primary border-primary/30';
+  return 'bg-tertiary/10 text-tertiary border-tertiary/30';
+}
+
 export function PermissionDialog({ request, runId, onApproved, onRejected, onClose }: PermissionDialogProps) {
   const [isProcessing, setIsProcessing] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -22,7 +28,7 @@ export function PermissionDialog({ request, runId, onApproved, onRejected, onClo
       onApproved?.();
       onClose?.();
     } catch (err) {
-      setError('Failed to approve request');
+      setError('No se pudo aprobar la solicitud');
       console.error(err);
     } finally {
       setIsProcessing(false);
@@ -37,7 +43,7 @@ export function PermissionDialog({ request, runId, onApproved, onRejected, onClo
       onRejected?.();
       onClose?.();
     } catch (err) {
-      setError('Failed to reject request');
+      setError('No se pudo rechazar la solicitud');
       console.error(err);
     } finally {
       setIsProcessing(false);
@@ -47,70 +53,72 @@ export function PermissionDialog({ request, runId, onApproved, onRejected, onClo
   const isDisabled = request.status !== 'PENDING' || isProcessing;
 
   return (
-    <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
-      <div className="bg-white rounded-lg shadow-xl max-w-md w-full">
-        <div className="p-6">
-          <div className="flex items-center justify-between mb-4">
-            <h2 className="text-xl font-semibold text-gray-900">NEXUS needs your permission</h2>
+    <div className="fixed inset-0 bg-[rgba(11,13,18,0.85)] backdrop-blur flex items-center justify-center p-space-md z-50">
+      <div className="bg-surface-container-high border border-outline-variant/40 rounded-lg shadow-overlay max-w-md w-full">
+        <div className="p-space-lg flex flex-col gap-space-md">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-space-sm">
+              <div className="w-8 h-8 rounded bg-error-container/40 flex items-center justify-center text-error">
+                <span className="material-symbols-outlined text-[18px]">shield_lock</span>
+              </div>
+              <h2 className="font-headline-sm text-headline-sm font-semibold text-on-surface">
+                NEXUS necesita tu permiso
+              </h2>
+            </div>
             <button
               onClick={onClose}
-              className="text-gray-400 hover:text-gray-600"
+              className="text-outline hover:text-on-surface transition-colors"
               disabled={isProcessing}
             >
-              ✕
+              <span className="material-symbols-outlined text-[18px]">close</span>
             </button>
           </div>
 
-          <div className="space-y-4">
-            <div>
-              <label className="text-sm font-medium text-gray-700">Action</label>
-              <p className="text-lg font-semibold text-gray-900">{request.tool_name}</p>
+          <div className="flex flex-col gap-space-sm">
+            <div className="bg-surface-container-lowest rounded p-space-sm flex flex-col gap-0.5">
+              <span className="font-label-mono-xs text-label-mono-xs text-outline uppercase">Acción</span>
+              <span className="font-code-base text-code-base text-secondary">{request.tool_name}</span>
             </div>
 
-            <div>
-              <label className="text-sm font-medium text-gray-700">Tool</label>
-              <p className="text-gray-600">{request.skill_name}</p>
+            <div className="flex items-center justify-between bg-surface-container-lowest rounded p-space-sm">
+              <div className="flex flex-col gap-0.5">
+                <span className="font-label-mono-xs text-label-mono-xs text-outline uppercase">Skill</span>
+                <span className="font-body-sm text-body-sm text-on-surface">{request.skill_name}</span>
+              </div>
+              <div className="flex flex-col items-end gap-0.5">
+                <span className="font-label-mono-xs text-label-mono-xs text-outline uppercase">Riesgo</span>
+                <span className={`font-label-mono-xs text-label-mono-xs border px-2 py-0.5 rounded ${riskTone(request.risk_level)}`}>
+                  {request.risk_level}
+                </span>
+              </div>
             </div>
 
-            <div>
-              <label className="text-sm font-medium text-gray-700">Risk Level</label>
-              <span className={`inline-flex items-center px-2 py-1 rounded text-xs font-medium ${
-                request.risk_level === 'HIGH'
-                  ? 'bg-red-100 text-red-800'
-                  : request.risk_level === 'MEDIUM'
-                  ? 'bg-yellow-100 text-yellow-800'
-                  : 'bg-green-100 text-green-800'
-              }`}>
-                {request.risk_level}
-              </span>
-            </div>
-
-            <div>
-              <label className="text-sm font-medium text-gray-700">Reason</label>
-              <p className="text-gray-600">{request.reason}</p>
+            <div className="bg-surface-container-lowest rounded p-space-sm flex flex-col gap-0.5">
+              <span className="font-label-mono-xs text-label-mono-xs text-outline uppercase">Motivo</span>
+              <span className="font-body-sm text-body-sm text-on-surface-variant">{request.reason}</span>
             </div>
 
             {error && (
-              <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-2 rounded">
+              <div className="bg-error-container/30 border border-error/40 text-error px-space-sm py-1.5 rounded font-body-sm text-body-sm">
                 {error}
               </div>
             )}
           </div>
 
-          <div className="flex gap-3 mt-6">
+          <div className="flex gap-space-sm pt-space-xs">
             <button
               onClick={handleReject}
               disabled={isDisabled}
-              className="flex-1 px-4 py-2 border border-gray-300 rounded text-gray-700 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+              className="flex-1 px-space-md py-1.5 bg-surface-container hover:bg-surface-container-high border border-outline-variant/40 text-error rounded font-body-sm text-body-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
             >
-              Reject
+              Rechazar
             </button>
             <button
               onClick={handleApprove}
               disabled={isDisabled}
-              className="flex-1 px-4 py-2 bg-nexus-600 text-white rounded hover:bg-nexus-700 disabled:opacity-50 disabled:cursor-not-allowed"
+              className="flex-1 px-space-md py-1.5 bg-primary text-on-primary hover:bg-primary-container rounded font-body-sm text-body-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
             >
-              {isProcessing ? 'Processing...' : 'Approve'}
+              {isProcessing ? 'Procesando…' : 'Aprobar'}
             </button>
           </div>
         </div>
