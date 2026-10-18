@@ -19,6 +19,7 @@ from app.presentation.api.routes.permission_requests import router as permission
 from app.presentation.api.routes.permissions import router as permissions_router
 from app.presentation.api.runtime_routes import router as runtime_router
 from app.presentation.api.scheduled_job_routes import router as scheduled_job_router
+from app.presentation.api.settings_routes import router as settings_router
 from app.presentation.api.skills_routes import router as skills_router
 from app.presentation.dependencies.security import get_security_audit
 from app.presentation.middleware.security import (
@@ -127,6 +128,7 @@ def create_app() -> FastAPI:
     application.add_middleware(RequestIdMiddleware)
     
     application.include_router(health_router)
+    application.include_router(settings_router)
     application.include_router(memory_router)
     application.include_router(llm_router)
     application.include_router(llm_health_router)

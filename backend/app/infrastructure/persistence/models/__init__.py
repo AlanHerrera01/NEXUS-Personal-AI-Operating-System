@@ -12,6 +12,9 @@ from app.infrastructure.persistence.models.permission_request_model import (
 from app.infrastructure.persistence.models.plan_step_model import PlanStepModel
 from app.infrastructure.persistence.models.proactive_rule_model import ProactiveRuleModel
 from app.infrastructure.persistence.models.runtime_session_model import RuntimeSessionModel
+from app.infrastructure.persistence.models.runtime_settings_model import (
+    RuntimeSettingsModel,
+)
 from app.infrastructure.persistence.models.scheduled_job_model import ScheduledJobModel
 from app.infrastructure.persistence.models.skill_model import SkillModel
 from app.infrastructure.persistence.models.task_model import TaskModel
@@ -30,6 +33,7 @@ __all__ = [
     "PlanStepModel",
     "ProactiveRuleModel",
     "RuntimeSessionModel",
+    "RuntimeSettingsModel",
     "ScheduledJobModel",
     "SkillModel",
     "TaskModel",
