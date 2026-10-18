@@ -61,6 +61,15 @@ class SqlMCPServerRepository(MCPServerRepository):
         results = self.session.execute(stmt).scalars().all()
         return [self._to_entity(r) for r in results]
 
+    def list_for_owner(self, owner_id: EntityId) -> list[MCPServer]:
+        stmt = (
+            select(MCPServerModel)
+            .where(MCPServerModel.owner_id == str(owner_id))
+            .order_by(MCPServerModel.name)
+        )
+        results = self.session.execute(stmt).scalars().all()
+        return [self._to_entity(r) for r in results]
+
     def delete(self, server_id: EntityId) -> None:
         stmt = select(MCPServerModel).where(MCPServerModel.id == str(server_id))
         result = self.session.execute(stmt).scalar_one_or_none()

@@ -57,6 +57,20 @@ class MCPServerRegistry:
         """List enabled servers."""
         return self.repository.list_enabled()
     
+    def list_servers_for_owner(self, owner_id: EntityId) -> list[MCPServer]:
+        """List the servers registered by one owner."""
+        return self.repository.list_for_owner(owner_id)
+    
+    def save_server(self, server: MCPServer) -> MCPServer:
+        """Persist a server whose fields were changed directly.
+
+        The update route edits several fields at once (description, enabled and
+        configuration) and the entity exposes the mutators for each; this is the
+        single write that records the result.
+        """
+        self.repository.save(server)
+        return server
+    
     def enable_server(self, server_id: EntityId) -> MCPServer | None:
         """Enable a server."""
         server = self.repository.get_by_id(server_id)

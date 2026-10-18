@@ -14,6 +14,7 @@ from app.presentation.api.event_ingress_routes import router as event_ingress_ro
 from app.presentation.api.health_routes import router as health_router
 from app.presentation.api.llm_health_routes import router as llm_health_router
 from app.presentation.api.llm_routes import router as llm_router
+from app.presentation.api.mcp_routes import router as mcp_router
 from app.presentation.api.memory_routes import router as memory_router
 from app.presentation.api.overview_routes import router as overview_router
 from app.presentation.api.proactive_rule_routes import router as proactive_rule_router
@@ -138,6 +139,8 @@ def create_app() -> FastAPI:
     application.include_router(llm_health_router)
     application.include_router(agent_run_router)
     application.include_router(skills_router)
+    # MCP server registration: stores configuration only, never connects.
+    application.include_router(mcp_router)
     application.include_router(permissions_router)
     application.include_router(permission_requests_router)
     # Registered in Phase 10: these routes were written but never mounted, so

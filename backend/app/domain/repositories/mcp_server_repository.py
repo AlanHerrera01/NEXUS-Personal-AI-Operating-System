@@ -31,6 +31,16 @@ class MCPServerRepository(ABC):
     def list_enabled(self) -> list[MCPServer]:
         """List enabled MCP servers."""
         raise NotImplementedError
+
+    @abstractmethod
+    def list_for_owner(self, owner_id: EntityId) -> list[MCPServer]:
+        """List the servers registered by one owner.
+
+        Separate from :meth:`list_all` because the HTTP surface must never hand
+        one caller another caller's rows; filtering after loading everything
+        would make ownership a presentation-layer habit instead of a query.
+        """
+        raise NotImplementedError
     
     @abstractmethod
     def delete(self, server_id: EntityId) -> None:
