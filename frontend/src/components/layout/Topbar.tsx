@@ -1,4 +1,5 @@
 import { useLocation } from 'react-router-dom';
+import { useAgentsDialog } from '../../hooks/useAgentsDialog';
 import { useOverview } from '../../hooks/useOverview';
 
 interface RouteMeta {
@@ -41,9 +42,11 @@ export function Topbar() {
   const { pathname } = useLocation();
   const meta = resolveMeta(pathname);
   const { data, connected } = useOverview();
+  const { open: openAgents } = useAgentsDialog();
 
   const pending = data?.authorizations.pending_count ?? 0;
   const model = data?.model;
+  const agent = data?.agent ?? null;
   const trust = data?.trust.default_decision ?? '--';
 
   return (
@@ -70,6 +73,22 @@ export function Topbar() {
             </>
           )}
         </div>
+        {/* The agent everything else runs against. Reachable from every screen
+            so "no active agent" is never a dead end. */}
+        <button
+          type="button"
+          onClick={openAgents}
+          title="Crear o cambiar el agente activo"
+          className="flex items-center gap-space-xs px-space-sm py-0.5 bg-surface-container-low rounded font-label-mono-xs text-label-mono-xs hover:bg-surface-container transition-colors"
+        >
+          <span
+            className={`w-1.5 h-1.5 rounded-full ${agent ? 'bg-tertiary' : 'bg-error'}`}
+          />
+          <span className="text-on-surface-variant max-w-[180px] truncate">
+            {agent ? `Agente: ${agent.name}` : 'Sin agente activo'}
+          </span>
+          <span className="material-symbols-outlined text-[14px] text-outline">expand_more</span>
+        </button>
       </div>
 
       <div className="flex items-center gap-space-md">

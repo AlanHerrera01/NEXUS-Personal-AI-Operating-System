@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { useAgentsDialog } from '../hooks/useAgentsDialog';
 import { useAsyncData } from '../hooks/useAsyncData';
 import { useOverview } from '../hooks/useOverview';
 import { agentApi } from '../services/api/agentApi';
@@ -425,6 +426,7 @@ function ApprovalCard({ run, request, busy, onDecide }: ApprovalCardProps) {
 
 export default function Chat() {
   const { data: overview, loading: overviewLoading, connected } = useOverview();
+  const { open: openAgents } = useAgentsDialog();
   const agentId = overview?.agent?.id ?? null;
   const model = overview?.model;
   const runtime = overview?.runtime;
@@ -727,9 +729,19 @@ export default function Chat() {
                 permitidas y te pedirá autorización para cualquier acción gobernada.
               </span>
               {!agentId && !overviewLoading && (
-                <span className="font-label-mono-xs text-label-mono-xs text-error">
-                  No hay un agente activo: crea o activa uno para poder ejecutar.
-                </span>
+                <div className="flex flex-col items-center gap-2">
+                  <span className="font-label-mono-xs text-label-mono-xs text-error">
+                    No hay un agente activo: crea o activa uno para poder ejecutar.
+                  </span>
+                  <button
+                    type="button"
+                    onClick={openAgents}
+                    className="px-space-md py-1.5 rounded bg-primary text-on-primary font-body-sm text-body-sm font-semibold hover:bg-primary-container hover:text-on-primary-container transition-colors flex items-center gap-1"
+                  >
+                    <span className="material-symbols-outlined text-[16px]">add</span>
+                    Crear agente
+                  </button>
+                </div>
               )}
             </div>
           ) : (

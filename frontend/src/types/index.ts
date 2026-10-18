@@ -1,9 +1,23 @@
 // Agent
+export type AgentStatus = 'ACTIVE' | 'INACTIVE';
+
 export interface Agent {
   id: string;
   name: string;
   description: string;
+  status: AgentStatus;
   created_at: string;
+  updated_at: string;
+}
+
+/** GET /api/v1/agents — the caller's registry plus which one is active. */
+export interface AgentsResponse {
+  items: Agent[];
+  /**
+   * The agent the dashboard would run a quick action against — the oldest
+   * ACTIVE one — or null when the caller has none active.
+   */
+  active_id: string | null;
 }
 
 // Agent Run

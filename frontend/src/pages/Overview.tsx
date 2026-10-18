@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useOverview } from '../hooks/useOverview';
+import { useAgentsDialog } from '../hooks/useAgentsDialog';
 import { useAsyncData } from '../hooks/useAsyncData';
 import { agentApi } from '../services/api/agentApi';
 import { catalogApi } from '../services/api/catalogApi';
@@ -63,6 +64,7 @@ function statusTone(status: string): string {
 export default function Overview() {
   const navigate = useNavigate();
   const { data, loading, error, connected, lastUpdated, refresh } = useOverview();
+  const { open: openAgents } = useAgentsDialog();
   const agentId = data?.agent?.id ?? null;
 
   const [command, setCommand] = useState('');
@@ -209,8 +211,19 @@ export default function Overview() {
             </div>
           </div>
           {commandError && (
-            <div className="font-label-mono-xs text-label-mono-xs text-error px-space-xs">
-              {commandError}
+            <div className="flex items-center gap-space-sm px-space-xs">
+              <span className="font-label-mono-xs text-label-mono-xs text-error">
+                {commandError}
+              </span>
+              {!agentId && (
+                <button
+                  type="button"
+                  onClick={openAgents}
+                  className="px-space-sm py-0.5 rounded bg-primary text-on-primary font-label-mono-xs text-label-mono-xs font-semibold hover:bg-primary-container hover:text-on-primary-container transition-colors"
+                >
+                  Crear agente
+                </button>
+              )}
             </div>
           )}
           {commandResult && (
