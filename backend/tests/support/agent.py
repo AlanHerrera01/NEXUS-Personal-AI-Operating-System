@@ -62,6 +62,11 @@ class FakeActionRepository(AgentActionRepository):
     def list_by_run(self, agent_run_id):
         return [action for action in self.items.values() if action.agent_run_id == agent_run_id]
 
+    def list_recent_for_user(self, user_id, limit=200):
+        # The fake stores no owner on an action; ownership is asserted through
+        # the run repository in the orchestrator tests, so this returns the store.
+        return list(self.items.values())[:limit]
+
 
 def memory_skill(service: MemoryService) -> MemorySkill:
     return MemorySkill(

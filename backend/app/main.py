@@ -8,12 +8,14 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.config.settings import get_settings
 from app.infrastructure.logging import configure_logging
+from app.presentation.api.activity_routes import router as activity_router
 from app.presentation.api.agent_run_routes import router as agent_run_router
 from app.presentation.api.event_ingress_routes import router as event_ingress_router
 from app.presentation.api.health_routes import router as health_router
 from app.presentation.api.llm_health_routes import router as llm_health_router
 from app.presentation.api.llm_routes import router as llm_router
 from app.presentation.api.memory_routes import router as memory_router
+from app.presentation.api.overview_routes import router as overview_router
 from app.presentation.api.proactive_rule_routes import router as proactive_rule_router
 from app.presentation.api.routes.permission_requests import router as permission_requests_router
 from app.presentation.api.routes.permissions import router as permissions_router
@@ -128,7 +130,9 @@ def create_app() -> FastAPI:
     application.add_middleware(RequestIdMiddleware)
     
     application.include_router(health_router)
+    application.include_router(overview_router)
     application.include_router(settings_router)
+    application.include_router(activity_router)
     application.include_router(memory_router)
     application.include_router(llm_router)
     application.include_router(llm_health_router)

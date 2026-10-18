@@ -7,7 +7,26 @@ from app.domain.value_objects.agent_action_status import AgentActionStatus
 from app.domain.value_objects.entity_id import EntityId
 from app.domain.value_objects.permission_decision import PermissionDecision
 from app.domain.value_objects.risk_level import RiskLevel
-from app.infrastructure.persistence.models import AgentActionModel
+from app.infrastructure.persistence.models import AgentActionModel, AgentRunModel
+
+
+def _to_entity(model: AgentActionModel) -> AgentAction:
+    return AgentAction(
+        id=EntityId(model.id),
+        agent_run_id=EntityId(model.agent_run_id),
+        skill_name=model.skill_name,
+        action_name=model.action_name,
+        arguments=model.arguments,
+        status=AgentActionStatus(model.status),
+        created_at=model.created_at,
+        risk_level=RiskLevel(model.risk_level) if model.risk_level else RiskLevel.LOW,
+        permission_decision=PermissionDecision(model.permission_decision)
+        if model.permission_decision
+        else None,
+        policy_result=model.policy_result,
+        execution_status=model.execution_status,
+        error_message=model.error_message,
+    )
 
 
 class SqlAlchemyAgentActionRepository(AgentActionRepository):
@@ -49,20 +68,14 @@ class SqlAlchemyAgentActionRepository(AgentActionRepository):
             .where(AgentActionModel.agent_run_id == agent_run_id.value)
             .order_by(AgentActionModel.created_at.asc())
         ).all()
-        return [
-            AgentAction(
-                id=EntityId(model.id),
-                agent_run_id=EntityId(model.agent_run_id),
-                skill_name=model.skill_name,
-                action_name=model.action_name,
-                arguments=model.arguments,
-                status=AgentActionStatus(model.status),
-                created_at=model.created_at,
-                risk_level=RiskLevel(model.risk_level) if model.risk_level else RiskLevel.LOW,
-                permission_decision=PermissionDecision(model.permission_decision) if model.permission_decision else None,
-                policy_result=model.policy_result,
-                execution_status=model.execution_status,
-                error_message=model.error_message,
-            )
-            for model in models
-        ]
+        return [_to_entity(model) for model in models]
+
+    def list_recent_for_user(self, user_id: EntityId, limit: int = 200) -> list[AgentAction]:
+        models = self.session.scalars(
+            select(AgentActionModel)
+            .join(AgentRunModel, AgentRunModel.id == AgentActionModel.agent_run_id)
+            .where(AgentRunModel.user_id == user_id.value)
+            .order_by(AgentActionModel.created_at.desc())
+            .limit(limit)
+        ).all()
+        return [_to_entity(model) for model in models]

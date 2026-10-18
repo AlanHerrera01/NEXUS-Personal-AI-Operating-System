@@ -39,6 +39,17 @@ class MemoryRepository(ABC):
         raise NotImplementedError
 
     @abstractmethod
+    def list_by_user(self, user_id: EntityId, limit: int = 100) -> list[Memory]:
+        """The most recent memories owned by ``user_id``, across all their agents.
+
+        Distinct from :meth:`list_by_agent` because a cross-agent view (an
+        activity feed, a "what has the system learned about me" summary) cannot
+        name a single agent up front. The owner filter is the same one every
+        other read applies.
+        """
+        raise NotImplementedError
+
+    @abstractmethod
     def search(
         self,
         agent_id: EntityId,

@@ -33,3 +33,18 @@ class SqlAlchemyAgentRunRepository(AgentRunRepository):
             )
         ).first()
         return agent_run_from_model(model) if model else None
+
+    def list_by_user(self, user_id: EntityId, limit: int = 50) -> list[AgentRun]:
+        """Most recent runs owned by ``user_id``.
+
+        The owner is part of the WHERE clause for the same reason it is on
+        :meth:`get_by_id`: a dashboard that lists runs is a read of the user's
+        request history, so an unscoped query would surface everyone's.
+        """
+        models = self.session.scalars(
+            select(AgentRunModel)
+            .where(AgentRunModel.user_id == user_id.value)
+            .order_by(AgentRunModel.created_at.desc())
+            .limit(limit)
+        ).all()
+        return [agent_run_from_model(model) for model in models]

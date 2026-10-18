@@ -63,6 +63,15 @@ class SqlAlchemyMemoryRepository(MemoryRepository):
         ).all()
         return [memory_from_model(model) for model in models]
 
+    def list_by_user(self, user_id: EntityId, limit: int = 100) -> list[Memory]:
+        models = self.session.scalars(
+            select(MemoryModel)
+            .where(MemoryModel.user_id == user_id.value)
+            .order_by(MemoryModel.created_at.desc())
+            .limit(limit)
+        ).all()
+        return [memory_from_model(model) for model in models]
+
     def search(
         self,
         agent_id: EntityId,

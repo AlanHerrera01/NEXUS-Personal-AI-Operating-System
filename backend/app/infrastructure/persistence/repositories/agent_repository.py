@@ -40,3 +40,16 @@ class SqlAlchemyAgentRepository(AgentRepository):
             )
         ).first()
         return agent_from_model(model) if model else None
+
+    def list_by_user(self, user_id: EntityId) -> list[Agent]:
+        """Every agent owned by ``user_id``, oldest first.
+
+        Owner-scoped for the same reason as :meth:`get_by_id`. The overview uses
+        this to pick the agent a quick action would run against.
+        """
+        models = self.session.scalars(
+            select(AgentModel)
+            .where(AgentModel.user_id == user_id.value)
+            .order_by(AgentModel.created_at.asc())
+        ).all()
+        return [agent_from_model(model) for model in models]

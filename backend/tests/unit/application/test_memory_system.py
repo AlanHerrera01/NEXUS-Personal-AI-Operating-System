@@ -45,6 +45,11 @@ class FakeMemoryRepository(MemoryRepository):
             if memory.agent_id == agent_id and memory.user_id == user_id
         ][:limit]
 
+    def list_by_user(self, user_id: EntityId, limit: int = 100) -> list[Memory]:
+        return [
+            memory for memory in self.items.values() if memory.user_id == user_id
+        ][:limit]
+
     def search(
         self,
         agent_id: EntityId,

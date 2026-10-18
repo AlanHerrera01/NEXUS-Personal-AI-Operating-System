@@ -44,6 +44,9 @@ class FakeActionRepository(AgentActionRepository):
     def list_by_run(self, agent_run_id):
         return [action for action in self.items if action.agent_run_id == agent_run_id]
 
+    def list_recent_for_user(self, user_id, limit=200):
+        return self.items[:limit]
+
 
 class FakeTool(Tool):
     def __init__(self, name="task.create", risk=RiskLevel.LOW, confirm=False):
