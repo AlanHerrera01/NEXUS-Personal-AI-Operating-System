@@ -13,7 +13,10 @@ Two providers, and the difference between them matters:
 from fastapi import Depends
 from sqlalchemy.orm import Session
 
-from app.application.settings.service import RuntimeSettingsService
+from app.application.settings.service import (
+    RuntimeSettingsService,
+    RuntimeSettingsSnapshot,
+)
 from app.config.settings import Settings, get_settings
 from app.infrastructure.persistence.repositories.runtime_settings_repository import (
     SqlAlchemyRuntimeSettingsRepository,
@@ -53,17 +56,13 @@ def get_runtime_settings_service(
     )
 
 
-def get_effective_settings(
-    service: RuntimeSettingsService = Depends(get_runtime_settings_service),
-    settings: Settings = Depends(get_settings),
-) -> Settings:
-    """The boot config with any saved overrides applied on top.
+def _merged(settings: Settings, snapshot: RuntimeSettingsSnapshot) -> Settings:
+    """The boot config with the persisted overrides applied on top.
 
     Degrades to the boot config when the override store cannot be read, so a
     database outage does not stop the model from answering with the credentials
     the environment already provided.
     """
-    snapshot = service.snapshot()
     if not snapshot.storage_available:
         return settings
     update = {
@@ -72,3 +71,23 @@ def get_effective_settings(
         if name in _FIELD_TO_SETTING
     }
     return settings.model_copy(update=update) if update else settings
+
+
+def get_effective_settings(
+    service: RuntimeSettingsService = Depends(get_runtime_settings_service),
+    settings: Settings = Depends(get_settings),
+) -> Settings:
+    """The merged configuration, for the request path."""
+    return _merged(settings, service.snapshot())
+
+
+def resolve_effective_settings(session: Session) -> Settings:
+    """The same merge, for a caller that holds a session but no request.
+
+    The orchestrator builder and the always-on loop are in that category: they
+    assemble long-lived objects outside a request, and they must still see the
+    model the panel was pointed at rather than only the one the process booted
+    with.
+    """
+    base = get_settings()
+    return _merged(base, get_runtime_settings_service(session, base).snapshot())

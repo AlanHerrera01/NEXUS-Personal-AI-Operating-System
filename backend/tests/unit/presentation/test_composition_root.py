@@ -11,11 +11,18 @@ from __future__ import annotations
 import pytest
 
 from app.application.agent_runtime.runtime_tool_executor import RuntimeToolExecutor
+from app.application.agents.llm_brain import LLMAgentBrain
+from app.application.agents.rule_based_brain import RuleBasedAgentBrain
 from app.application.tools.executor import RegistryToolExecutor
 from app.application.tools.registry import InMemoryToolRegistry
 from app.config.settings import Settings
 from app.infrastructure.skills.tasks.tools.create_task import TaskCreateTool
-from app.presentation.dependencies.agent import build_skill_system, orchestrator_dependency
+from app.presentation.dependencies.agent import (
+    build_agent_brain,
+    build_orchestrator,
+    build_skill_system,
+    orchestrator_dependency,
+)
 from app.presentation.dependencies.runtime import (
     SANDBOXED_TOOLS,
     build_runtime_tool_executor,
@@ -74,6 +81,35 @@ class TestRuntimeToolExecutorWiring:
         # declared definition, so an empty mapping silently downgrades every
         # sandboxed tool to the bare baseline policy.
         assert orchestrator().tool_executor.definitions
+
+
+class TestAgentBrainWiring:
+    """The brain is the difference between an agent that answers and one that echoes.
+
+    It is asserted here for the same reason the executor is: the wiring is the part
+    no behaviour test can see. The orchestrator used to be wired to a rule-based
+    brain that answered from a template without ever asking a model, and every
+    test passed while the chat replied with the user's own request.
+    """
+
+    def test_the_model_backed_brain_is_the_default(self) -> None:
+        assert isinstance(build_agent_brain(Settings()), LLMAgentBrain)
+
+    def test_the_rule_based_brain_is_selectable_for_an_offline_deployment(self) -> None:
+        assert isinstance(
+            build_agent_brain(Settings(agent_brain="rule_based")), RuleBasedAgentBrain
+        )
+
+    def test_the_orchestrator_gets_that_brain(self) -> None:
+        built = build_orchestrator(
+            _UnusedSession(),  # type: ignore[arg-type]
+            build_skill_system(_UnusedSession()),  # type: ignore[arg-type]
+            object(),  # type: ignore[arg-type]
+            object(),  # type: ignore[arg-type]
+            Settings(),
+        )
+
+        assert isinstance(built.agent_brain, LLMAgentBrain)
 
 
 class TestRuntimeEnabledSwitch:

@@ -4,8 +4,10 @@ from fastapi import Depends
 from sqlalchemy.orm import Session
 
 from app.application.agents.context_builder import AgentContextBuilder
+from app.application.agents.llm_brain import LLMAgentBrain
 from app.application.agents.orchestrator import AgentOrchestrator
 from app.application.agents.rule_based_brain import RuleBasedAgentBrain
+from app.application.llm.llm_service import LLMService
 from app.application.memory.delete_memory import DeleteMemoryUseCase
 from app.application.memory.firewall import MemoryFirewall
 from app.application.memory.get_memory import GetMemoryUseCase
@@ -23,13 +25,15 @@ from app.application.skills.registry import SkillRegistry
 from app.application.skills.selector import KeywordSkillSelector
 from app.application.tools.executor import RegistryToolExecutor
 from app.application.tools.registry import InMemoryToolRegistry
-from app.config.settings import get_settings
+from app.config.settings import Settings, get_settings
+from app.domain.ports.agent_brain import AgentBrain
 from app.domain.ports.skill import Skill
 from app.domain.ports.skill_selector import SkillSelector
 from app.infrastructure.persistence.repositories.agent_action_repository import SqlAlchemyAgentActionRepository
 from app.infrastructure.persistence.repositories.agent_run_repository import SqlAlchemyAgentRunRepository
 from app.infrastructure.persistence.repositories.memory_repository import SqlAlchemyMemoryRepository
 from app.infrastructure.persistence.repositories.task_repository import SqlAlchemyTaskRepository
+from app.infrastructure.llm.nebius.provider import NebiusLLMProvider
 from app.infrastructure.skills.memory.skill import MemorySkill
 from app.infrastructure.skills.tasks.skill import TaskSkill
 from app.presentation.dependencies.persistence import session_dependency
@@ -39,6 +43,7 @@ from app.presentation.dependencies.security import (
     get_security_audit,
     get_trust_engine,
 )
+from app.presentation.dependencies.settings import resolve_effective_settings
 
 
 @dataclass(frozen=True)
@@ -89,11 +94,26 @@ def skill_system_dependency(session: Session = Depends(session_dependency)) -> S
     return build_skill_system(session)
 
 
+def build_agent_brain(settings: Settings) -> AgentBrain:
+    """The decision maker the orchestrator will use.
+
+    ``agent_brain`` selects between the model and the deterministic local brain.
+    There is deliberately no silent fallback: a deployment that asks for "llm"
+    without credentials gets a run that says the model is not configured, because
+    an echo of the user's own request dressed up as an answer is worse than an
+    error that names what is missing.
+    """
+    if settings.agent_brain == "rule_based":
+        return RuleBasedAgentBrain()
+    return LLMAgentBrain(LLMService(NebiusLLMProvider(settings)))
+
+
 def build_orchestrator(
     session: Session,
     system: SkillSystem,
     trust_engine: TrustEngine,
     approval_service: ApprovalService,
+    settings: Settings | None = None,
 ) -> AgentOrchestrator:
     """Wire the agent pipeline for one session.
 
@@ -102,14 +122,20 @@ def build_orchestrator(
     is the point: a scheduled run must go through the identical Trust Engine,
     approval service and sandboxed executor as an interactive one, and a second
     wiring of this graph would be a second, unaudited execution path.
+
+    The brain is the one part built from the *effective* settings, because the
+    only knobs a saved override can move are the model's; the loop's bounds below
+    are boot-level and unreachable from the panel. Resolved here rather than by
+    the caller so the always-on loop and a request pick the same model.
     """
+    resolved = settings or resolve_effective_settings(session)
     # The orchestrator's executor is the sandboxing one, not the raw registry
     # executor. Phase 10 existed as a composition-root builder that nothing
     # called, so every tool ran in the API process and no sandbox was ever
     # created. The registry executor stays underneath as the delegate, which is
     # what keeps non-sandboxed tools behaving exactly as they did in Phases 1-9.
     return AgentOrchestrator(
-        agent_brain=RuleBasedAgentBrain(),
+        agent_brain=build_agent_brain(resolved),
         context_builder=AgentContextBuilder(SqlAlchemyMemoryRepository(session), system.tools),
         tool_registry=system.tools,
         tool_executor=build_runtime_tool_executor(

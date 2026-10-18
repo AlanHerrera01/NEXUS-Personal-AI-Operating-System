@@ -130,6 +130,12 @@ class Settings(BaseSettings):
     # Rejected before a request ever reaches the model. Bounds prompt flooding
     # from the cheapest end, where it is cheapest to refuse.
     agent_max_request_chars: int = 8_000
+    # Which decision maker the orchestrator wires. "llm" is the real one: the
+    # model decides, so the chat answers instead of echoing the request back.
+    # "rule_based" is the deterministic local brain -- no credentials, no network,
+    # keyword-driven. It is the escape hatch for an offline deployment, and what
+    # the orchestrator used before there was a brain that asked a model.
+    agent_brain: str = "llm"
 
     # Prompt-injection defence. Detection never rewrites content and never
     # grants or denies authority: it raises an audit event and fences external
@@ -260,6 +266,11 @@ class Settings(BaseSettings):
 
         if self.agent_max_runtime_seconds < 1:
             raise ValueError("agent_max_runtime_seconds must be greater than zero")
+        if self.agent_brain not in {"llm", "rule_based"}:
+            # An unrecognised value would otherwise pick a brain by accident, and
+            # the difference between the two is whether the model is consulted at
+            # all -- which is not a thing to get wrong silently.
+            raise ValueError("agent_brain must be 'llm' or 'rule_based'")
         if self.permission_request_ttl_seconds < 1:
             raise ValueError("permission_request_ttl_seconds must be greater than zero")
 
