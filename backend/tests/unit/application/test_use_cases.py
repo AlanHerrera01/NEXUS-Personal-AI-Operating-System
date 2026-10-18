@@ -26,6 +26,10 @@ class FakeAgentRepository(AgentRepository):
             return None
         return agent
 
+    def list_by_user(self, user_id: EntityId) -> list[Agent]:
+        owned = [agent for agent in self.items.values() if agent.user_id == user_id]
+        return sorted(owned, key=lambda agent: agent.created_at)
+
 
 class FakeAgentRunRepository(AgentRunRepository):
     def __init__(self) -> None:

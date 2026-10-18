@@ -20,3 +20,14 @@ class AgentRepository(ABC):
     def get_by_id(self, agent_id: EntityId, user_id: EntityId) -> Agent | None:
         """The agent, or None if it does not exist or is not owned by ``user_id``."""
         raise NotImplementedError
+
+    @abstractmethod
+    def list_by_user(self, user_id: EntityId) -> list[Agent]:
+        """Every agent owned by ``user_id``, oldest first.
+
+        The order is part of the contract rather than an implementation detail:
+        the dashboard treats the first ACTIVE agent as *the* active agent, so
+        returning them in whatever order the table happens to yield would make
+        that choice unstable.
+        """
+        raise NotImplementedError

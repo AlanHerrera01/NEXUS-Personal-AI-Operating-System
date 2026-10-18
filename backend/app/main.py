@@ -9,6 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.config.settings import get_settings
 from app.infrastructure.logging import configure_logging
 from app.presentation.api.activity_routes import router as activity_router
+from app.presentation.api.agent_routes import router as agent_router
 from app.presentation.api.agent_run_routes import router as agent_run_router
 from app.presentation.api.event_ingress_routes import router as event_ingress_router
 from app.presentation.api.health_routes import router as health_router
@@ -137,6 +138,7 @@ def create_app() -> FastAPI:
     application.include_router(memory_router)
     application.include_router(llm_router)
     application.include_router(llm_health_router)
+    application.include_router(agent_router)
     application.include_router(agent_run_router)
     application.include_router(skills_router)
     # MCP server registration: stores configuration only, never connects.
