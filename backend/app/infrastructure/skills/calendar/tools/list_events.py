@@ -1,82 +1,86 @@
-from datetime import datetime, timedelta
+from datetime import datetime
 
+from pydantic import Field
+
+from app.application.calendar.errors import InvalidEventError
+from app.application.calendar.list_events import ListCalendarEventsUseCase
+from app.application.calendar.validation import MAX_LIMIT
 from app.application.tools.base import UseCaseTool
-from app.domain.ports.tool import ToolInput, ToolOutput
+from app.domain.ports.tool import ToolContext, ToolInput, ToolOutput
+from app.domain.repositories.calendar_event_repository import CalendarEventRepository
+from app.domain.value_objects.tool_error_code import ToolErrorCode
+from app.infrastructure.skills.calendar.tools.contracts import SKILL_NAME, CalendarEventSummary
+
+INPUT_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "start": {
+            "type": ["string", "null"],
+            "description": "Window opens here; events ending after it are returned (ISO-8601 with offset)",
+        },
+        "end": {
+            "type": ["string", "null"],
+            "description": "Window closes here; events starting before it are returned",
+        },
+        "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": MAX_LIMIT,
+            "description": "Maximum events to return",
+        },
+    },
+    "required": [],
+    "additionalProperties": False,
+}
 
 
 class CalendarListInput(ToolInput):
     start: datetime | None = None
     end: datetime | None = None
+    limit: int = Field(default=50, ge=1, le=MAX_LIMIT)
 
 
-class CalendarEventOutput(ToolOutput):
-    event_id: str
-    title: str
-    description: str | None = None
-    start_time: datetime | None = None
-    end_time: datetime | None = None
-    location: str | None = None
-    url: str | None = None
+class CalendarListOutput(ToolOutput):
+    items: list[CalendarEventSummary]
+    count: int
 
 
-class ListCalendarEventsTool(UseCaseTool):
-    """Lista eventos del calendario - SIMULATION MODE.
-
-    En modo simulation, devuelve eventos de ejemplo con fechas próximas.
-    En producción real, conectaría con Google Calendar u otro proveedor.
-    """
-
-    def __init__(self) -> None:
+class ListCalendarEventsTool(UseCaseTool[CalendarListInput, CalendarListOutput]):
+    def __init__(self, repository: CalendarEventRepository) -> None:
         super().__init__(
             name="calendar.list_events",
-            description="List calendar events",
-            skill_name="calendar",
+            description=(
+                "List events on the user's own NEXUS calendar, optionally within "
+                "a time window. Overlapping events are included."
+            ),
+            skill_name=SKILL_NAME,
             input_model=CalendarListInput,
-            input_schema=CalendarListInput.model_json_schema(),
-            risk_level="LOW",
+            input_schema=INPUT_SCHEMA,
             read_only=True,
-            side_effect=False,
-            requires_confirmation=False,
+            category="calendar",
+            error_codes={InvalidEventError: ToolErrorCode.CALENDAR_EVENT_INVALID},
         )
+        self.use_case = ListCalendarEventsUseCase(repository)
 
-    async def run(self, payload: CalendarListInput, context: object) -> list[CalendarEventOutput]:
-        # SIMULATION: Devolver eventos de ejemplo según el contexto
-        now = datetime.now()
-        today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
-        tomorrow_start = today_start + timedelta(days=1)
-
-        # Events for today and tomorrow
-        events = [
-            CalendarEventOutput(
-                event_id="1",
-                title="Reunion de equipo NEXUS",
-                description="Discusion semanal del progreso del proyecto",
-                start_time=now + timedelta(minutes=30),
-                end_time=now + timedelta(hours=1),
-                url="https://calendar.example.com/event/team-meeting",
-            ),
-            CalendarEventOutput(
-                event_id="2",
-                title="Cita con inversor",
-                description="Reunion para discutir el siguiente hito del proyecto",
-                start_time=tomorrow_start + timedelta(hours=10),
-                end_time=tomorrow_start + timedelta(hours=11),
-                url="https://calendar.example.com/event/investor-meeting",
-            ),
-            CalendarEventOutput(
-                event_id="3",
-                title="Hora de almuerzo",
-                description="Almuerzo con el equipo de desarrollo",
-                start_time=now + timedelta(hours=2),
-                end_time=now + timedelta(hours=3),
-                url="https://calendar.example.com/event/lunch",
-            ),
-        ]
-
-        # Filtrar por rango si se especifica
-        if payload.start:
-            events = [e for e in events if e.start_time >= payload.start]
-        if payload.end:
-            events = [e for e in events if e.start_time <= payload.end]
-
-        return events
+    async def run(self, payload: CalendarListInput, context: ToolContext) -> CalendarListOutput:
+        events = self.use_case.execute(
+            agent_id=context.agent_id,
+            start=payload.start,
+            end=payload.end,
+            limit=payload.limit,
+        )
+        return CalendarListOutput(
+            items=[
+                CalendarEventSummary(
+                    event_id=str(event.id),
+                    title=event.title,
+                    description=event.description,
+                    start_at=event.start_at,
+                    end_at=event.end_at,
+                    location=event.location,
+                    created_at=event.created_at,
+                )
+                for event in events
+            ],
+            count=len(events),
+        )

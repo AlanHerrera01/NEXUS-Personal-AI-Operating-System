@@ -1,6 +1,7 @@
 from app.infrastructure.persistence.models.agent_action_model import AgentActionModel
 from app.infrastructure.persistence.models.agent_model import AgentModel
 from app.infrastructure.persistence.models.agent_run_model import AgentRunModel
+from app.infrastructure.persistence.models.calendar_event_model import CalendarEventModel
 from app.infrastructure.persistence.models.execution_plan_model import ExecutionPlanModel
 from app.infrastructure.persistence.models.job_execution_model import JobExecutionModel
 from app.infrastructure.persistence.models.mcp_server_model import MCPServerModel
@@ -24,6 +25,7 @@ __all__ = [
     "AgentActionModel",
     "AgentModel",
     "AgentRunModel",
+    "CalendarEventModel",
     "ExecutionPlanModel",
     "JobExecutionModel",
     "MCPServerModel",

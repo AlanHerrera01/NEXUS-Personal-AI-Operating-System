@@ -29,8 +29,12 @@ from app.config.settings import Settings, get_settings
 from app.domain.ports.agent_brain import AgentBrain
 from app.domain.ports.skill import Skill
 from app.domain.ports.skill_selector import SkillSelector
+from app.domain.repositories.calendar_event_repository import CalendarEventRepository
 from app.infrastructure.persistence.repositories.agent_action_repository import SqlAlchemyAgentActionRepository
 from app.infrastructure.persistence.repositories.agent_run_repository import SqlAlchemyAgentRunRepository
+from app.infrastructure.persistence.repositories.calendar_event_repository import (
+    SqlAlchemyCalendarEventRepository,
+)
 from app.infrastructure.persistence.repositories.memory_repository import SqlAlchemyMemoryRepository
 from app.infrastructure.persistence.repositories.task_repository import SqlAlchemyTaskRepository
 from app.infrastructure.llm.nebius.provider import NebiusLLMProvider
@@ -56,7 +60,11 @@ class SkillSystem:
     selector: SkillSelector
 
 
-def build_skills(task_repository: SqlAlchemyTaskRepository, memory_service: MemoryService) -> list[Skill]:
+def build_skills(
+    task_repository: SqlAlchemyTaskRepository,
+    calendar_repository: CalendarEventRepository,
+    memory_service: MemoryService,
+) -> list[Skill]:
     """Composition root for capabilities. Adding a skill means adding one line here."""
     return [
         TaskSkill(task_repository),
@@ -67,7 +75,7 @@ def build_skills(task_repository: SqlAlchemyTaskRepository, memory_service: Memo
             delete_memory=DeleteMemoryUseCase(memory_service),
         ),
         GitHubSkill(),
-        CalendarSkill(),
+        CalendarSkill(calendar_repository),
     ]
 
 
@@ -79,7 +87,11 @@ def build_skill_system(session: Session, selector: SkillSelector | None = None) 
         DeterministicMemoryPolicy(),
         MemoryFirewall(),
     )
-    for skill in build_skills(SqlAlchemyTaskRepository(session), memory_service):
+    for skill in build_skills(
+        SqlAlchemyTaskRepository(session),
+        SqlAlchemyCalendarEventRepository(session),
+        memory_service,
+    ):
         skills.register(skill)
     skill_selector = selector or KeywordSkillSelector()
     return SkillSystem(

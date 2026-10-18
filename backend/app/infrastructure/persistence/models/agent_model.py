@@ -23,3 +23,4 @@ class AgentModel(Base):
 
     runs = relationship("AgentRunModel", back_populates="agent", cascade="all, delete-orphan")
     tasks = relationship("TaskModel", back_populates="agent")
+    calendar_events = relationship("CalendarEventModel", back_populates="agent")

@@ -1,12 +1,17 @@
+from datetime import datetime
+
 from app.domain.entities.agent import Agent
 from app.domain.entities.agent_run import AgentRun
+from app.domain.entities.calendar_event import CalendarEvent
 from app.domain.entities.execution_plan import ExecutionPlan
 from app.domain.entities.memory import Memory
 from app.domain.entities.skill import Skill
 from app.domain.entities.task import Task
+from app.infrastructure.persistence.mappers.datetime_normaliser import ensure_utc
 from app.infrastructure.persistence.models import (
     AgentModel,
     AgentRunModel,
+    CalendarEventModel,
     ExecutionPlanModel,
     MemoryModel,
     SkillModel,
@@ -120,6 +125,47 @@ def memory_from_model(model: MemoryModel) -> Memory:
         persistence=MemoryPersistenceDecision(model.persistence),
         source=MemorySource(model.source),
         importance=MemoryImportance(model.importance),
+        created_at=model.created_at,
+        updated_at=model.updated_at,
+    )
+
+
+def _required_utc(value: datetime) -> datetime:
+    """``ensure_utc`` for a NOT NULL column.
+
+    The column cannot hold ``None``, so the optional it returns is an artefact of
+    the shared helper's signature rather than a state this mapper can receive.
+    """
+    return ensure_utc(value) or value
+
+
+def calendar_event_to_model(event: CalendarEvent) -> CalendarEventModel:
+    return CalendarEventModel(
+        id=event.id.value,
+        agent_id=event.agent_id.value if event.agent_id else None,
+        title=event.title,
+        description=event.description,
+        location=event.location,
+        start_at=event.start_at,
+        end_at=event.end_at,
+        created_at=event.created_at,
+        updated_at=event.updated_at,
+    )
+
+
+def calendar_event_from_model(model: CalendarEventModel) -> CalendarEvent:
+    # The entity refuses a naive datetime, and several drivers return one for a
+    # ``timestamptz`` column, so the values are normalised on the way in rather
+    # than trusted. UTC is the right reading here because that is what the
+    # domain wrote.
+    return CalendarEvent(
+        id=EntityId(model.id),
+        agent_id=EntityId(model.agent_id) if model.agent_id else None,
+        title=model.title,
+        description=model.description,
+        location=model.location,
+        start_at=_required_utc(model.start_at),
+        end_at=_required_utc(model.end_at),
         created_at=model.created_at,
         updated_at=model.updated_at,
     )
