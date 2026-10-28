@@ -56,7 +56,7 @@ OTHER_USER = EntityId.new()
 
 def _new_job(session, name: str = "always-on integration job") -> ScheduledJob:
     agent = SqlAlchemyAgentRepository(session).save(
-        Agent(name=f"agent for {name} {EntityId.new()}")
+        Agent(name=f"agent for {name} {EntityId.new()}", user_id=USER)
     )
     return CreateScheduledJobUseCase(
         agent_repository=SqlAlchemyAgentRepository(session),

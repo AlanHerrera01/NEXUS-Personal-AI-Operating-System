@@ -18,6 +18,14 @@ class AgentRun:
     #: not mean sharing its runs, and an agent-run resume endpoint that checks
     #: only the agent would hand over the other party's request history.
     user_id: EntityId | None = None
+    #: Optional conversation that groups related runs together
+    conversation_id: EntityId | None = None
+    #: What the agent said when it stopped. Kept on the run rather than only in
+    #: the response of the call that produced it, so a run read back later -- a
+    #: recent run reopened from the sidebar -- still shows its whole exchange.
+    #: ``response`` closes a run; ``question`` is what it parked on.
+    response: str | None = None
+    question: str | None = None
 
     def __post_init__(self) -> None:
         require_text(self.user_request, "user_request")

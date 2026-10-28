@@ -12,6 +12,8 @@ dist
 dist-ssr
 .vite
 *.local
+.nexus-access-key
+.pytest_cache/
 .env
 .env.*
 !.env.example
@@ -32,6 +34,10 @@ database/data/
 .test-runtime/
 .test-runtime-security/
 .test-runtime-*/
+
+# Local video production (sources, media, renders and exports)
+/nexus-video/
+/nexus-videos/
 
 # Editor directories and files
 .vscode/*

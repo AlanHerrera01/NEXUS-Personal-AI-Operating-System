@@ -45,6 +45,23 @@ class FakeAgentRunRepository(AgentRunRepository):
             return None
         return run
 
+    def delete(self, agent_run_id: EntityId, user_id: EntityId) -> bool:
+        run = self.items.get(agent_run_id)
+        if run is None or run.user_id != user_id:
+            return False
+        del self.items[agent_run_id]
+        return True
+
+    def list_by_conversation(
+        self, conversation_id: EntityId, user_id: EntityId
+    ) -> list[AgentRun]:
+        runs = [
+            run
+            for run in self.items.values()
+            if run.conversation_id == conversation_id and run.user_id == user_id
+        ]
+        return sorted(runs, key=lambda run: run.created_at)
+
 
 class FakeExecutionPlanRepository(ExecutionPlanRepository):
     def __init__(self) -> None:

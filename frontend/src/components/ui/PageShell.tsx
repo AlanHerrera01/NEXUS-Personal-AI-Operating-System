@@ -1,4 +1,5 @@
 import type { ReactNode } from 'react';
+import { useI18n } from '../../hooks/useI18n';
 
 interface PageShellProps {
   eyebrow: string;
@@ -36,6 +37,7 @@ interface ComingSoonProps {
 }
 
 export function ComingSoon({ icon, title, description }: ComingSoonProps) {
+  const { t } = useI18n();
   return (
     <div className="bg-surface-container-low border border-outline-variant/30 rounded p-space-xl flex flex-col items-center text-center gap-space-sm">
       <div className="w-12 h-12 rounded bg-surface-container-high flex items-center justify-center text-primary">
@@ -44,23 +46,25 @@ export function ComingSoon({ icon, title, description }: ComingSoonProps) {
       <h2 className="font-headline-sm text-headline-sm font-semibold text-on-surface">{title}</h2>
       <p className="font-body-sm text-body-sm text-on-surface-variant max-w-md">{description}</p>
       <span className="font-label-mono-xs text-label-mono-xs text-outline uppercase tracking-wider bg-surface-container-lowest px-2 py-0.5 rounded mt-space-xs">
-        Módulo en desarrollo
+        {t('common.comingSoon')}
       </span>
     </div>
   );
 }
 
 /** Shared status rows so every data-backed page reports loading/error/empty alike. */
-export function LoadingRow({ label = 'Consultando al backend…' }: { label?: string }) {
+export function LoadingRow({ label }: { label?: string }) {
+  const { t } = useI18n();
   return (
     <div className="font-label-mono-xs text-label-mono-xs text-outline bg-surface-container-lowest rounded p-space-md flex items-center gap-space-sm">
       <span className="w-1.5 h-1.5 rounded-full bg-secondary animate-pulse" />
-      {label}
+      {label ?? t('common.loading')}
     </div>
   );
 }
 
 export function ErrorRow({ message, onRetry }: { message: string; onRetry?: () => void }) {
+  const { t } = useI18n();
   return (
     <div className="bg-error-container/30 border border-error/40 rounded p-space-md flex items-center justify-between gap-space-md">
       <div className="flex items-center gap-space-sm text-error">
@@ -73,7 +77,7 @@ export function ErrorRow({ message, onRetry }: { message: string; onRetry?: () =
           onClick={onRetry}
           className="font-label-mono-xs text-label-mono-xs bg-surface-container hover:bg-surface-container-high text-on-surface px-space-sm py-1 rounded transition-colors"
         >
-          Reintentar
+          {t('common.retry')}
         </button>
       )}
     </div>

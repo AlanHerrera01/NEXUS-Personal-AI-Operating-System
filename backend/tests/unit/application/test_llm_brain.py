@@ -116,6 +116,46 @@ async def test_malformed_json_is_answered_verbatim_rather_than_dropped() -> None
     assert decision.response == '{"decision": "FINAL", "response": "cortada'
 
 
+async def test_a_final_decision_with_literal_newlines_is_read() -> None:
+    # A provider that emits pretty-printed prose inside the JSON string produces
+    # invalid JSON. It is still a decision, not a reason to show the wrapper to
+    # the user.
+    brain, _ = build_brain('{"decision": "FINAL", "response": "Línea 1\nLínea 2"}')
+
+    decision = await send(brain)
+
+    assert decision.decision_type is AgentDecisionType.FINAL
+    assert decision.response == "Línea 1\nLínea 2"
+
+
+async def test_a_final_decision_with_unescaped_quotes_is_recovered() -> None:
+    # A quoted phrase inside the prose ("gear fear") makes the envelope invalid
+    # JSON. The answer is still whole, and recovering it is what stops the
+    # wrapper from being shown or cut at the first quote.
+    brain, _ = build_brain(
+        '{"decision": "FINAL", "response": "Vence el "miedo al equipo" (gear fear)."}'
+    )
+
+    decision = await send(brain)
+
+    assert decision.decision_type is AgentDecisionType.FINAL
+    assert decision.response == 'Vence el "miedo al equipo" (gear fear).'
+
+
+async def test_an_invalid_envelope_keeps_every_line_after_a_quoted_phrase() -> None:
+    brain, _ = build_brain(
+        '{"decision": "FINAL", "response": "Intro\n\n'
+        '**2. Vence el "miedo al equipo" (gear fear)**\nSigue."}'
+    )
+
+    decision = await send(brain)
+
+    assert decision.decision_type is AgentDecisionType.FINAL
+    assert decision.response == (
+        'Intro\n\n**2. Vence el "miedo al equipo" (gear fear)**\nSigue.'
+    )
+
+
 # -- a tool call needs a decision, not a resemblance --------------------------
 
 
@@ -205,6 +245,25 @@ async def test_observations_are_shown_back_to_the_model() -> None:
     user = provider.requests[0].messages[1]
     assert "tasks.create" in user.content
     assert "Comprar" in user.content
+
+
+async def test_conversation_history_comes_before_the_current_request() -> None:
+    brain, provider = build_brain('{"decision": "FINAL", "response": "ok"}')
+    context = {
+        "conversation_history": [
+            {
+                "request": "Consejos para mejorar en Arena Breakout",
+                "response": "Prioriza extraer y usa munición Tier 3.",
+            }
+        ]
+    }
+
+    await send(brain, context)
+
+    user = provider.requests[0].messages[1]
+    assert "Historial de la conversación" in user.content
+    assert "Arena Breakout" in user.content
+    assert user.content.index("Arena Breakout") < user.content.index("hOLA")
 
 
 async def test_relevant_memories_are_shown_back_to_the_model() -> None:

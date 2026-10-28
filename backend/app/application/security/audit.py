@@ -64,6 +64,8 @@ class AuditEntry:
     decision: str | None = None
     risk_level: str | None = None
     permission_id: str | None = None
+    #: Which policy (or ``permission``/``plan_validator``) produced the decision.
+    policy_id: str | None = None
     result: str | None = None
     reason: str | None = None
     timestamp: datetime = field(default_factory=utc_now)
@@ -80,6 +82,7 @@ class AuditEntry:
             "decision": self.decision,
             "risk_level": self.risk_level,
             "permission_id": self.permission_id,
+            "policy_id": self.policy_id,
             "result": self.result,
             "reason": self.reason,
         }
@@ -109,6 +112,7 @@ class SecurityAuditLog:
         decision: str | None = None,
         risk_level: str | None = None,
         permission_id: EntityId | str | None = None,
+        policy_id: str | None = None,
         result: str | None = None,
         reason: str | None = None,
         #: Extra structured fields for the log line only. Accepted and ignored by
@@ -126,6 +130,7 @@ class SecurityAuditLog:
             decision=_short(decision),
             risk_level=_short(risk_level),
             permission_id=_as_id(permission_id),
+            policy_id=_short(policy_id),
             result=_short(result),
             # Redaction happens here rather than at each call site. A control
             # that every caller must remember is a control that will eventually
@@ -146,6 +151,7 @@ class SecurityAuditLog:
                 "agent_run_id": entry.agent_run_id,
                 "tool_name": entry.tool_name,
                 "decision": entry.decision,
+                "policy_id": entry.policy_id,
                 "reason": entry.reason,
             },
         )
@@ -204,6 +210,7 @@ def _safe_fields(kwargs: dict[str, Any]) -> dict[str, Any]:
         "decision",
         "risk_level",
         "permission_id",
+        "policy_id",
         "result",
         "reason",
     }

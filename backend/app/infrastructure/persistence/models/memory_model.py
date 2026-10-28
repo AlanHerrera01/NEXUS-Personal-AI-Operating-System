@@ -1,7 +1,8 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import DateTime, ForeignKey, Index, String, Text, func
+from sqlalchemy import DateTime, ForeignKey, Index, JSON, String, Text, func
+from pgvector.sqlalchemy import Vector
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.infrastructure.persistence.database import Base
@@ -28,6 +29,9 @@ class MemoryModel(Base):
     # partially-owned legacy table still reads.
     user_id: Mapped[uuid.UUID | None] = mapped_column(nullable=True, default=None)
     content: Mapped[str] = mapped_column(Text, nullable=False)
+    # Model fingerprint prevents comparing vectors from different providers/models.
+    embedding: Mapped[list[float] | None] = mapped_column(Vector().with_variant(JSON(), "sqlite"), nullable=True)
+    embedding_model: Mapped[str | None] = mapped_column(String(64), nullable=True)
     memory_type: Mapped[str] = mapped_column(String(32), nullable=False)
     persistence: Mapped[str] = mapped_column(String(32), nullable=False, default="SAVE")
     source: Mapped[str] = mapped_column(String(32), nullable=False, default="SYSTEM")

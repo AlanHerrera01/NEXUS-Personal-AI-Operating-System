@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
+import { useI18n } from '../hooks/useI18n';
+import type { InterpolationValues, MessageKey } from '../i18n/types';
 import { ApiError } from '../services/api/apiClient';
 import { alwaysOnApi } from '../services/api/alwaysOnApi';
 import { PageShell } from '../components/ui/PageShell';
@@ -11,21 +13,53 @@ import type {
   ScheduledTriggerType,
 } from '../types';
 
-const TRIGGERS: { value: ScheduledTriggerType; label: string; hint: string }[] = [
-  { value: 'ONCE', label: 'Once', hint: 'Runs a single time at a moment you pick.' },
-  { value: 'INTERVAL', label: 'Every N', hint: 'Repeats on a fixed interval.' },
-  { value: 'CRON', label: 'Cron', hint: 'Standard 5-field cron, e.g. 0 9 * * 1-5.' },
-  { value: 'EVENT', label: 'On event', hint: 'Fires when a matching webhook event arrives.' },
+/** The translator, shaped so helpers outside the component can take it as an argument. */
+type Translate = (key: MessageKey, values?: InterpolationValues) => string;
+
+/* The form options carry a key rather than a label so the lists stay module
+   constants: they are translated where they render, not when they are built. */
+const TRIGGERS: { value: ScheduledTriggerType; labelKey: MessageKey; hintKey: MessageKey }[] = [
+  {
+    value: 'ONCE',
+    labelKey: 'pages.automation.triggers.once',
+    hintKey: 'pages.automation.triggers.onceHint',
+  },
+  {
+    value: 'INTERVAL',
+    labelKey: 'pages.automation.triggers.everyN',
+    hintKey: 'pages.automation.triggers.everyNHint',
+  },
+  {
+    value: 'CRON',
+    labelKey: 'pages.automation.triggers.cron',
+    hintKey: 'pages.automation.triggers.cronHint',
+  },
+  {
+    value: 'EVENT',
+    labelKey: 'pages.automation.triggers.onEvent',
+    hintKey: 'pages.automation.triggers.onEventHint',
+  },
 ];
 
-const CONDITION_TYPES = [
-  { value: 'DAILY_AT_TIME', label: 'Daily at a time' },
-  { value: 'DAY_OF_WEEK', label: 'On certain weekdays' },
-  { value: 'IDLE_FOR', label: 'After a period of inactivity' },
-  { value: 'TASK_OVERDUE', label: 'When tasks are overdue' },
-] as const;
+const CONDITION_TYPES: { value: string; labelKey: MessageKey }[] = [
+  { value: 'DAILY_AT_TIME', labelKey: 'pages.automation.rules.form.dailyAtTime' },
+  { value: 'DAY_OF_WEEK', labelKey: 'pages.automation.rules.form.dayOfWeek' },
+  { value: 'IDLE_FOR', labelKey: 'pages.automation.rules.form.idleFor' },
+  { value: 'TASK_OVERDUE', labelKey: 'pages.automation.rules.form.taskOverdue' },
+];
 
 const WEEKDAYS = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'];
+
+/* The codes travel to the backend; only their labels are interface copy. */
+const WEEKDAY_LABELS: Record<string, MessageKey> = {
+  mon: 'pages.automation.weekdays.mon',
+  tue: 'pages.automation.weekdays.tue',
+  wed: 'pages.automation.weekdays.wed',
+  thu: 'pages.automation.weekdays.thu',
+  fri: 'pages.automation.weekdays.fri',
+  sat: 'pages.automation.weekdays.sat',
+  sun: 'pages.automation.weekdays.sun',
+};
 
 const JOB_STATUS_STYLES: Record<string, string> = {
   ACTIVE: 'bg-surface-container text-tertiary',
@@ -45,10 +79,12 @@ const EXECUTION_STATUS_STYLES: Record<string, string> = {
   CANCELLED: 'bg-surface-container text-outline',
 };
 
-function errorMessage(error: unknown): string {
+function errorMessage(error: unknown, t: Translate): string {
+  // The backend's own message is data and ships as it arrives; only the
+  // fallback for a thrown value that is not an Error is interface copy.
   if (error instanceof ApiError) return error.message;
   if (error instanceof Error) return error.message;
-  return 'Something went wrong';
+  return t('pages.automation.errors.generic');
 }
 
 function localTimezone(): string {
@@ -61,27 +97,25 @@ function localTimezone(): string {
   }
 }
 
-function describeTrigger(job: ScheduledJob): string {
+function describeTrigger(job: ScheduledJob, t: Translate): string {
   switch (job.trigger_type) {
     case 'CRON':
-      return `cron ${job.cron_expression ?? '?'}`;
+      return t('pages.automation.triggers.describeCron', {
+        expression: job.cron_expression ?? '?',
+      });
     case 'INTERVAL':
-      return `every ${job.interval_seconds ?? '?'}s`;
+      return t('pages.automation.triggers.describeInterval', {
+        seconds: job.interval_seconds ?? '?',
+      });
     case 'EVENT':
-      return 'on event';
+      return t('pages.automation.triggers.describeEvent');
     case 'ONCE':
-      return 'once';
+      return t('pages.automation.triggers.describeOnce');
   }
 }
 
-function formatMoment(value: string | null): string {
-  if (!value) return '--';
-  const parsed = new Date(value);
-  if (Number.isNaN(parsed.getTime())) return '--';
-  return parsed.toLocaleString();
-}
-
 export default function Automation() {
+  const { t } = useI18n();
   const [tab, setTab] = useState<'schedules' | 'proactive'>('schedules');
 
   const tabClass = (active: boolean) =>
@@ -93,16 +127,16 @@ export default function Automation() {
 
   return (
     <PageShell
-      eyebrow="Configuration · Automation"
-      title="Automation"
-      description="Trabajo autónomo programado y reglas proactivas, siempre gobernadas por el Trust Engine."
+      eyebrow={t('pages.automation.eyebrow')}
+      title={t('pages.automation.title')}
+      description={t('pages.automation.description')}
       actions={
         <div className="flex gap-space-xs">
           <button onClick={() => setTab('schedules')} className={tabClass(tab === 'schedules')}>
-            Schedules
+            {t('pages.automation.tabs.schedules')}
           </button>
           <button onClick={() => setTab('proactive')} className={tabClass(tab === 'proactive')}>
-            Proactive Rules
+            {t('pages.automation.tabs.proactiveRules')}
           </button>
         </div>
       }
@@ -113,6 +147,7 @@ export default function Automation() {
 }
 
 function Schedules() {
+  const { t, formatDateTime } = useI18n();
   const [jobs, setJobs] = useState<ScheduledJob[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -126,11 +161,11 @@ function Schedules() {
       setJobs(await alwaysOnApi.listJobs());
       setError(null);
     } catch (caught) {
-      setError(errorMessage(caught));
+      setError(errorMessage(caught, t));
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [t]);
 
   useEffect(() => {
     // `cancelled` guards the classic setState-after-unmount leak: the list request
@@ -144,7 +179,7 @@ function Schedules() {
           setError(null);
         }
       } catch (caught) {
-        if (!cancelled) setError(errorMessage(caught));
+        if (!cancelled) setError(errorMessage(caught, t));
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -152,7 +187,7 @@ function Schedules() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [t]);
 
   const act = async (run: () => Promise<unknown>) => {
     try {
@@ -160,7 +195,7 @@ function Schedules() {
       setError(null);
       await refresh();
     } catch (caught) {
-      setError(errorMessage(caught));
+      setError(errorMessage(caught, t));
     }
   };
 
@@ -175,7 +210,7 @@ function Schedules() {
         const rows = await alwaysOnApi.listExecutions(job.id);
         setExecutions((previous) => ({ ...previous, [job.id]: rows }));
       } catch (caught) {
-        setError(errorMessage(caught));
+        setError(errorMessage(caught, t));
       }
     }
   };
@@ -195,7 +230,7 @@ function Schedules() {
           onClick={() => setShowForm(true)}
           className="px-4 py-2 rounded bg-primary text-on-primary text-sm hover:bg-primary-container"
         >
-          New schedule
+          {t('pages.automation.schedules.new')}
         </button>
       )}
 
@@ -206,12 +241,9 @@ function Schedules() {
       )}
 
       {loading ? (
-        <p className="text-outline text-sm">Loading schedules...</p>
+        <p className="text-outline text-sm">{t('pages.automation.schedules.loading')}</p>
       ) : jobs.length === 0 ? (
-        <p className="text-outline text-sm">
-          No schedules yet. A schedule creates an agent run at a chosen time or in
-          response to an event.
-        </p>
+        <p className="text-outline text-sm">{t('pages.automation.schedules.empty')}</p>
       ) : (
         <div className="space-y-2">
           {jobs.map((job) => (
@@ -228,10 +260,15 @@ function Schedules() {
                       {job.status}
                     </span>
                   </div>
-                  <p className="text-sm text-on-surface-variant mt-1">{describeTrigger(job)}</p>
+                  <p className="text-sm text-on-surface-variant mt-1">{describeTrigger(job, t)}</p>
                   <p className="text-xs text-outline mt-1">
-                    {job.timezone} &middot; next {formatMoment(job.next_run_at)}
-                    {job.last_error ? ` · last error: ${job.last_error}` : ''}
+                    {t('pages.automation.schedules.meta', {
+                      timezone: job.timezone,
+                      next: formatDateTime(job.next_run_at),
+                    })}
+                    {job.last_error
+                      ? t('pages.automation.schedules.lastError', { message: job.last_error })
+                      : ''}
                   </p>
                 </div>
                 <div className="flex gap-2 shrink-0">
@@ -239,28 +276,30 @@ function Schedules() {
                     onClick={() => void toggleHistory(job)}
                     className="px-3 py-1 rounded border border-outline-variant/40 text-sm hover:bg-surface-container-lowest"
                   >
-                    {expanded === job.id ? 'Hide history' : 'History'}
+                    {expanded === job.id
+                      ? t('pages.automation.schedules.hideHistory')
+                      : t('pages.automation.schedules.history')}
                   </button>
                   {job.status === 'PAUSED' || job.status === 'FAILED' ? (
                     <button
                       onClick={() => void act(() => alwaysOnApi.resumeJob(job.id))}
                       className="px-3 py-1 rounded border border-outline-variant/40 text-sm hover:bg-surface-container-lowest"
                     >
-                      Resume
+                      {t('pages.automation.schedules.resume')}
                     </button>
                   ) : (
                     <button
                       onClick={() => void act(() => alwaysOnApi.pauseJob(job.id))}
                       className="px-3 py-1 rounded border border-outline-variant/40 text-sm hover:bg-surface-container-lowest"
                     >
-                      Pause
+                      {t('pages.automation.schedules.pause')}
                     </button>
                   )}
                   <button
                     onClick={() => void act(() => alwaysOnApi.deleteJob(job.id))}
                     className="px-3 py-1 rounded border border-error/40 text-sm text-error hover:bg-error-container/30"
                   >
-                    Delete
+                    {t('common.delete')}
                   </button>
                 </div>
               </div>
@@ -268,16 +307,16 @@ function Schedules() {
               {expanded === job.id && (
                 <div className="border-t border-outline-variant/10 px-4 py-3 bg-surface-container-lowest">
                   {(executions[job.id] ?? []).length === 0 ? (
-                    <p className="text-xs text-outline">No executions recorded yet.</p>
+                    <p className="text-xs text-outline">{t('pages.automation.schedules.noExecutions')}</p>
                   ) : (
                     <table className="w-full text-xs">
                       <thead className="text-outline">
                         <tr>
-                          <th className="text-left py-1">Status</th>
-                          <th className="text-left py-1">Scheduled for</th>
-                          <th className="text-left py-1">Attempt</th>
-                          <th className="text-left py-1">Outcome</th>
-                          <th className="text-left py-1">Run</th>
+                          <th className="text-left py-1">{t('common.status')}</th>
+                          <th className="text-left py-1">{t('pages.automation.schedules.table.scheduledFor')}</th>
+                          <th className="text-left py-1">{t('pages.automation.schedules.table.attempt')}</th>
+                          <th className="text-left py-1">{t('pages.automation.schedules.table.outcome')}</th>
+                          <th className="text-left py-1">{t('pages.automation.schedules.table.run')}</th>
                         </tr>
                       </thead>
                       <tbody>
@@ -293,7 +332,7 @@ function Schedules() {
                                 {row.status}
                               </span>
                             </td>
-                            <td className="py-1 pr-2">{formatMoment(row.scheduled_for)}</td>
+                            <td className="py-1 pr-2">{formatDateTime(row.scheduled_for)}</td>
                             <td className="py-1 pr-2">{row.attempt}</td>
                             <td className="py-1 pr-2 text-on-surface-variant">
                               {row.error_message ?? row.result_summary ?? '--'}
@@ -301,7 +340,7 @@ function Schedules() {
                             <td className="py-1 pr-2">
                               {row.agent_run_id ? (
                                 <a className="text-secondary hover:underline" href={`/runs/${row.agent_run_id}`}>
-                                  view
+                                  {t('pages.automation.schedules.table.view')}
                                 </a>
                               ) : (
                                 '--'
@@ -329,6 +368,7 @@ function CreateJobForm({
   onCancel: () => void;
   onCreated: () => Promise<void>;
 }) {
+  const { t } = useI18n();
   const [agentId, setAgentId] = useState('');
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
@@ -341,7 +381,7 @@ function CreateJobForm({
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
-  const activeTrigger = TRIGGERS.find((t) => t.value === triggerType);
+  const activeTrigger = TRIGGERS.find((trigger) => trigger.value === triggerType);
 
   const submit = async (event: React.FormEvent) => {
     event.preventDefault();
@@ -362,10 +402,11 @@ function CreateJobForm({
     if (triggerType === 'INTERVAL') body.interval_seconds = Number(intervalSeconds);
     if (triggerType === 'ONCE') {
       if (!runAt) {
-        setError('Pick a date and time for a one-time schedule.');
+        setError(t('pages.automation.schedules.form.pickDate'));
         setSaving(false);
         return;
       }
+      // `runAt` is a payload value, not display, so it stays an ISO string.
       body.run_at = new Date(runAt).toISOString();
     }
 
@@ -373,7 +414,7 @@ function CreateJobForm({
       await alwaysOnApi.createJob(body);
       await onCreated();
     } catch (caught) {
-      setError(errorMessage(caught));
+      setError(errorMessage(caught, t));
     } finally {
       setSaving(false);
     }
@@ -381,7 +422,7 @@ function CreateJobForm({
 
   return (
     <form onSubmit={submit} className="bg-surface-container-low border border-outline-variant/20 rounded p-4 space-y-3">
-      <h2 className="font-semibold text-on-surface">New schedule</h2>
+      <h2 className="font-semibold text-on-surface">{t('pages.automation.schedules.new')}</h2>
 
       {error && (
         <div className="p-2 rounded bg-error-container/30 border border-error/40 text-error text-sm">
@@ -391,29 +432,31 @@ function CreateJobForm({
 
       <div className="grid grid-cols-2 gap-3">
         <label className="text-sm">
-          <span className="block text-on-surface-variant mb-1">Agent ID</span>
+          <span className="block text-on-surface-variant mb-1">
+            {t('pages.automation.schedules.form.agentId')}
+          </span>
           <input
             value={agentId}
             onChange={(e) => setAgentId(e.target.value)}
             required
             className="w-full px-2 py-1 border border-outline-variant/40 rounded text-sm"
-            placeholder="uuid of the agent to run"
+            placeholder={t('pages.automation.schedules.form.agentIdPlaceholder')}
           />
         </label>
         <label className="text-sm">
-          <span className="block text-on-surface-variant mb-1">Name</span>
+          <span className="block text-on-surface-variant mb-1">{t('common.name')}</span>
           <input
             value={name}
             onChange={(e) => setName(e.target.value)}
             required
             className="w-full px-2 py-1 border border-outline-variant/40 rounded text-sm"
-            placeholder="Morning briefing"
+            placeholder={t('pages.automation.schedules.form.namePlaceholder')}
           />
         </label>
       </div>
 
       <label className="block text-sm">
-        <span className="block text-on-surface-variant mb-1">Description</span>
+        <span className="block text-on-surface-variant mb-1">{t('common.description')}</span>
         <input
           value={description}
           onChange={(e) => setDescription(e.target.value)}
@@ -423,50 +466,58 @@ function CreateJobForm({
 
       <div className="grid grid-cols-2 gap-3">
         <label className="text-sm">
-          <span className="block text-on-surface-variant mb-1">Trigger</span>
+          <span className="block text-on-surface-variant mb-1">
+            {t('pages.automation.schedules.form.trigger')}
+          </span>
           <select
             value={triggerType}
             onChange={(e) => setTriggerType(e.target.value as ScheduledTriggerType)}
             className="w-full px-2 py-1 border border-outline-variant/40 rounded text-sm"
           >
-            {TRIGGERS.map((t) => (
-              <option key={t.value} value={t.value}>
-                {t.label}
+            {TRIGGERS.map((trigger) => (
+              <option key={trigger.value} value={trigger.value}>
+                {t(trigger.labelKey)}
               </option>
             ))}
           </select>
         </label>
         <label className="text-sm">
-          <span className="block text-on-surface-variant mb-1">Timezone</span>
+          <span className="block text-on-surface-variant mb-1">
+            {t('pages.automation.schedules.form.timezone')}
+          </span>
           <input
             value={timezone}
             onChange={(e) => setTimezone(e.target.value)}
             className="w-full px-2 py-1 border border-outline-variant/40 rounded text-sm"
-            placeholder="Europe/Madrid"
+            placeholder={t('pages.automation.schedules.form.timezonePlaceholder')}
           />
         </label>
       </div>
 
       {activeTrigger && (
-        <p className="text-xs text-outline">{activeTrigger.hint}</p>
+        <p className="text-xs text-outline">{t(activeTrigger.hintKey)}</p>
       )}
 
       {triggerType === 'CRON' && (
         <label className="block text-sm">
-          <span className="block text-on-surface-variant mb-1">Cron expression</span>
+          <span className="block text-on-surface-variant mb-1">
+            {t('pages.automation.schedules.form.cronExpression')}
+          </span>
           <input
             value={cron}
             onChange={(e) => setCron(e.target.value)}
             required
             className="w-full px-2 py-1 border border-outline-variant/40 rounded text-sm font-code-base"
-            placeholder="0 9 * * 1-5"
+            placeholder={t('pages.automation.schedules.form.cronPlaceholder')}
           />
         </label>
       )}
 
       {triggerType === 'INTERVAL' && (
         <label className="block text-sm">
-          <span className="block text-on-surface-variant mb-1">Every (seconds)</span>
+          <span className="block text-on-surface-variant mb-1">
+            {t('pages.automation.schedules.form.everySeconds')}
+          </span>
           <input
             type="number"
             min={60}
@@ -479,7 +530,9 @@ function CreateJobForm({
 
       {triggerType === 'ONCE' && (
         <label className="block text-sm">
-          <span className="block text-on-surface-variant mb-1">Run at</span>
+          <span className="block text-on-surface-variant mb-1">
+            {t('pages.automation.schedules.form.runAt')}
+          </span>
           <input
             type="datetime-local"
             value={runAt}
@@ -490,13 +543,15 @@ function CreateJobForm({
       )}
 
       <label className="block text-sm">
-        <span className="block text-on-surface-variant mb-1">Prompt for the agent run</span>
+        <span className="block text-on-surface-variant mb-1">
+          {t('pages.automation.schedules.form.prompt')}
+        </span>
         <textarea
           value={prompt}
           onChange={(e) => setPrompt(e.target.value)}
           rows={3}
           className="w-full px-2 py-1 border border-outline-variant/40 rounded text-sm"
-          placeholder="What should the agent do when this fires?"
+          placeholder={t('pages.automation.schedules.form.promptPlaceholder')}
         />
       </label>
 
@@ -506,14 +561,14 @@ function CreateJobForm({
           disabled={saving}
           className="px-4 py-2 rounded bg-primary text-on-primary text-sm disabled:opacity-50"
         >
-          {saving ? 'Creating...' : 'Create schedule'}
+          {saving ? t('pages.automation.schedules.form.creating') : t('pages.automation.schedules.form.create')}
         </button>
         <button
           type="button"
           onClick={onCancel}
           className="px-4 py-2 rounded border border-outline-variant/40 text-sm"
         >
-          Cancel
+          {t('common.cancel')}
         </button>
       </div>
     </form>
@@ -521,6 +576,7 @@ function CreateJobForm({
 }
 
 function ProactiveRules() {
+  const { t, formatDateTime, formatNumber } = useI18n();
   const [rules, setRules] = useState<ProactiveRule[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -532,11 +588,11 @@ function ProactiveRules() {
       setRules(await alwaysOnApi.listRules());
       setError(null);
     } catch (caught) {
-      setError(errorMessage(caught));
+      setError(errorMessage(caught, t));
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [t]);
 
   useEffect(() => {
     // Same unmount guard as the schedules tab.
@@ -549,7 +605,7 @@ function ProactiveRules() {
           setError(null);
         }
       } catch (caught) {
-        if (!cancelled) setError(errorMessage(caught));
+        if (!cancelled) setError(errorMessage(caught, t));
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -557,7 +613,7 @@ function ProactiveRules() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [t]);
 
   const act = async (run: () => Promise<unknown>) => {
     try {
@@ -565,7 +621,7 @@ function ProactiveRules() {
       setError(null);
       await refresh();
     } catch (caught) {
-      setError(errorMessage(caught));
+      setError(errorMessage(caught, t));
     }
   };
 
@@ -584,7 +640,7 @@ function ProactiveRules() {
           onClick={() => setShowForm(true)}
           className="px-4 py-2 rounded bg-primary text-on-primary text-sm hover:bg-primary-container"
         >
-          New rule
+          {t('pages.automation.rules.new')}
         </button>
       )}
 
@@ -595,12 +651,9 @@ function ProactiveRules() {
       )}
 
       {loading ? (
-        <p className="text-outline text-sm">Loading rules...</p>
+        <p className="text-outline text-sm">{t('pages.automation.rules.loading')}</p>
       ) : rules.length === 0 ? (
-        <p className="text-outline text-sm">
-          No proactive rules yet. A rule lets the agent start something on its own
-          under a condition you define, subject to a cooldown.
-        </p>
+        <p className="text-outline text-sm">{t('pages.automation.rules.empty')}</p>
       ) : (
         <div className="space-y-2">
           {rules.map((rule) => (
@@ -616,19 +669,31 @@ function ProactiveRules() {
                           : 'bg-surface-container text-outline'
                       }`}
                     >
-                      {rule.enabled ? 'enabled' : 'disabled'}
+                      {rule.enabled
+                        ? t('pages.automation.rules.enabled')
+                        : t('pages.automation.rules.disabled')}
                     </span>
                   </div>
                   <p className="text-sm text-on-surface-variant mt-1">
-                    condition <code className="text-xs">{String(rule.condition.type)}</code>{' '}
-                    &rarr; action <code className="text-xs">{String(rule.action.type)}</code>
+                    {t('pages.automation.rules.conditionLabel')}{' '}
+                    <code className="text-xs">{String(rule.condition.type)}</code>{' '}
+                    &rarr; {t('pages.automation.rules.actionLabel')}{' '}
+                    <code className="text-xs">{String(rule.action.type)}</code>
                   </p>
                   <p className="text-xs text-outline mt-1">
-                    fired {rule.trigger_count} time{rule.trigger_count === 1 ? '' : 's'}
+                    {rule.trigger_count === 1
+                      ? t('pages.automation.rules.firedOne', {
+                          count: formatNumber(rule.trigger_count),
+                        })
+                      : t('pages.automation.rules.firedMany', {
+                          count: formatNumber(rule.trigger_count),
+                        })}
                     {rule.last_triggered_at
-                      ? ` · last ${formatMoment(rule.last_triggered_at)}`
+                      ? t('pages.automation.rules.lastTriggered', {
+                          moment: formatDateTime(rule.last_triggered_at),
+                        })
                       : ''}{' '}
-                    &middot; cooldown {rule.cooldown_seconds}s
+                    {t('pages.automation.rules.cooldown', { seconds: rule.cooldown_seconds })}
                   </p>
                 </div>
                 <div className="flex gap-2 shrink-0">
@@ -642,13 +707,15 @@ function ProactiveRules() {
                     }
                     className="px-3 py-1 rounded border border-outline-variant/40 text-sm hover:bg-surface-container-lowest"
                   >
-                    {rule.enabled ? 'Disable' : 'Enable'}
+                    {rule.enabled
+                      ? t('pages.automation.rules.disable')
+                      : t('pages.automation.rules.enable')}
                   </button>
                   <button
                     onClick={() => void act(() => alwaysOnApi.deleteRule(rule.id))}
                     className="px-3 py-1 rounded border border-error/40 text-sm text-error hover:bg-error-container/30"
                   >
-                    Delete
+                    {t('common.delete')}
                   </button>
                 </div>
               </div>
@@ -667,6 +734,7 @@ function CreateRuleForm({
   onCancel: () => void;
   onCreated: () => Promise<void>;
 }) {
+  const { t } = useI18n();
   const [agentId, setAgentId] = useState('');
   const [name, setName] = useState('');
   const [conditionType, setConditionType] = useState<string>(CONDITION_TYPES[0].value);
@@ -706,7 +774,7 @@ function CreateRuleForm({
       await alwaysOnApi.createRule(body);
       await onCreated();
     } catch (caught) {
-      setError(errorMessage(caught));
+      setError(errorMessage(caught, t));
     } finally {
       setSaving(false);
     }
@@ -714,7 +782,7 @@ function CreateRuleForm({
 
   return (
     <form onSubmit={submit} className="bg-surface-container-low border border-outline-variant/20 rounded p-4 space-y-3">
-      <h2 className="font-semibold text-on-surface">New proactive rule</h2>
+      <h2 className="font-semibold text-on-surface">{t('pages.automation.rules.form.title')}</h2>
 
       {error && (
         <div className="p-2 rounded bg-error-container/30 border border-error/40 text-error text-sm">
@@ -724,7 +792,9 @@ function CreateRuleForm({
 
       <div className="grid grid-cols-2 gap-3">
         <label className="text-sm">
-          <span className="block text-on-surface-variant mb-1">Agent ID</span>
+          <span className="block text-on-surface-variant mb-1">
+            {t('pages.automation.rules.form.agentId')}
+          </span>
           <input
             value={agentId}
             onChange={(e) => setAgentId(e.target.value)}
@@ -733,27 +803,29 @@ function CreateRuleForm({
           />
         </label>
         <label className="text-sm">
-          <span className="block text-on-surface-variant mb-1">Name</span>
+          <span className="block text-on-surface-variant mb-1">{t('common.name')}</span>
           <input
             value={name}
             onChange={(e) => setName(e.target.value)}
             required
             className="w-full px-2 py-1 border border-outline-variant/40 rounded text-sm"
-            placeholder="Nudge me after a quiet hour"
+            placeholder={t('pages.automation.rules.form.namePlaceholder')}
           />
         </label>
       </div>
 
       <label className="block text-sm">
-        <span className="block text-on-surface-variant mb-1">Condition</span>
+        <span className="block text-on-surface-variant mb-1">
+          {t('pages.automation.rules.form.condition')}
+        </span>
         <select
           value={conditionType}
           onChange={(e) => setConditionType(e.target.value)}
           className="w-full px-2 py-1 border border-outline-variant/40 rounded text-sm"
         >
-          {CONDITION_TYPES.map((c) => (
-            <option key={c.value} value={c.value}>
-              {c.label}
+          {CONDITION_TYPES.map((condition) => (
+            <option key={condition.value} value={condition.value}>
+              {t(condition.labelKey)}
             </option>
           ))}
         </select>
@@ -761,7 +833,9 @@ function CreateRuleForm({
 
       {(conditionType === 'DAILY_AT_TIME' || conditionType === 'DAY_OF_WEEK') && (
         <label className="block text-sm">
-          <span className="block text-on-surface-variant mb-1">Time (HH:MM)</span>
+          <span className="block text-on-surface-variant mb-1">
+            {t('pages.automation.rules.form.time')}
+          </span>
           <input
             value={at}
             onChange={(e) => setAt(e.target.value)}
@@ -772,7 +846,9 @@ function CreateRuleForm({
 
       {conditionType === 'DAY_OF_WEEK' && (
         <div className="text-sm">
-          <span className="block text-on-surface-variant mb-1">Days</span>
+          <span className="block text-on-surface-variant mb-1">
+            {t('pages.automation.rules.form.days')}
+          </span>
           <div className="flex gap-2">
             {WEEKDAYS.map((day) => (
               <label key={day} className="flex items-center gap-1 text-xs">
@@ -785,7 +861,7 @@ function CreateRuleForm({
                     )
                   }
                 />
-                {day}
+                {t(WEEKDAY_LABELS[day])}
               </label>
             ))}
           </div>
@@ -794,7 +870,9 @@ function CreateRuleForm({
 
       {conditionType === 'IDLE_FOR' && (
         <label className="block text-sm">
-          <span className="block text-on-surface-variant mb-1">Idle for (minutes)</span>
+          <span className="block text-on-surface-variant mb-1">
+            {t('pages.automation.rules.form.idleForMinutes')}
+          </span>
           <input
             type="number"
             min={1}
@@ -807,7 +885,9 @@ function CreateRuleForm({
 
       {conditionType === 'TASK_OVERDUE' && (
         <label className="block text-sm">
-          <span className="block text-on-surface-variant mb-1">Overdue tasks at least</span>
+          <span className="block text-on-surface-variant mb-1">
+            {t('pages.automation.rules.form.overdueAtLeast')}
+          </span>
           <input
             type="number"
             min={1}
@@ -820,18 +900,22 @@ function CreateRuleForm({
 
       <div className="grid grid-cols-2 gap-3">
         <label className="text-sm">
-          <span className="block text-on-surface-variant mb-1">Action</span>
+          <span className="block text-on-surface-variant mb-1">
+            {t('pages.automation.rules.form.action')}
+          </span>
           <select
             value={actionType}
             onChange={(e) => setActionType(e.target.value)}
             className="w-full px-2 py-1 border border-outline-variant/40 rounded text-sm"
           >
-            <option value="SUGGEST">Suggest (surface it, do not act)</option>
-            <option value="RUN_AGENT">Run agent</option>
+            <option value="SUGGEST">{t('pages.automation.rules.form.actionSuggest')}</option>
+            <option value="RUN_AGENT">{t('pages.automation.rules.form.actionRunAgent')}</option>
           </select>
         </label>
         <label className="text-sm">
-          <span className="block text-on-surface-variant mb-1">Cooldown (seconds)</span>
+          <span className="block text-on-surface-variant mb-1">
+            {t('pages.automation.rules.form.cooldown')}
+          </span>
           <input
             type="number"
             min={60}
@@ -844,14 +928,16 @@ function CreateRuleForm({
       </div>
 
       <label className="block text-sm">
-        <span className="block text-on-surface-variant mb-1">Message</span>
+        <span className="block text-on-surface-variant mb-1">
+          {t('pages.automation.rules.form.message')}
+        </span>
         <textarea
           value={message}
           onChange={(e) => setMessage(e.target.value)}
           required
           rows={2}
           className="w-full px-2 py-1 border border-outline-variant/40 rounded text-sm"
-          placeholder="What the agent should say or do"
+          placeholder={t('pages.automation.rules.form.messagePlaceholder')}
         />
       </label>
 
@@ -861,14 +947,14 @@ function CreateRuleForm({
           disabled={saving}
           className="px-4 py-2 rounded bg-primary text-on-primary text-sm disabled:opacity-50"
         >
-          {saving ? 'Creating...' : 'Create rule'}
+          {saving ? t('pages.automation.rules.form.creating') : t('pages.automation.rules.form.create')}
         </button>
         <button
           type="button"
           onClick={onCancel}
           className="px-4 py-2 rounded border border-outline-variant/40 text-sm"
         >
-          Cancel
+          {t('common.cancel')}
         </button>
       </div>
     </form>

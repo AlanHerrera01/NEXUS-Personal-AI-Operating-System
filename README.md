@@ -137,7 +137,7 @@ Persistent, ownership-scoped memory with three types:
 - **Semantic Memory**: Facts and relevant knowledge
 - **Preference Memory**: Recurring user decisions and preferences
 
-**Technology**: PostgreSQL + pgvector for semantic search with Memory Firewall to prevent storing secrets and injection attempts.
+**Technology**: PostgreSQL with optional pgvector semantic retrieval. `MEMORY_SEARCH_MODE=keyword` is the offline default; `semantic` requires an explicitly configured embedding provider. The Memory Firewall rejects secrets before persistence. See [secure setup and integrations](docs/secure-setup.md).
 
 ### Agent Orchestrator
 
@@ -145,7 +145,7 @@ Coordinates agent work through a documented pipeline:
 
 1. Receive user request
 2. Load user context (memories, preferences)
-3. Retrieve relevant memories via pgvector search
+3. Retrieve relevant memories using the configured keyword or pgvector semantic mode
 4. Generate executable execution plan
 5. Validate plan with PlanValidator
 6. Consult Trust Engine (ALLOW/ASK/DENY decisions)
@@ -175,10 +175,33 @@ Reusable skills grouping related tools following the Ports and Adapters pattern:
 |-------|-------|----------|
 | **Tasks** | create, list, get, update, complete | productivity |
 | **Memory** | save, search, get, delete | knowledge |
-| **GitHub** | list_repos, create_issue, create_pull_request | development |
+| **GitHub** | list_repos, get_repository, read_contents, create_issue, create_pull_request | development |
 | **Calendar** | create_event, list_events | productivity |
+| **Web** | search, fetch | knowledge |
+| **Files** | search, read, docs.extract | files |
+| **Knowledge** | ingest, search | knowledge |
+| **Email** | list, read, draft | email |
+| **Reminders** | create, list | reminders |
+| **Docker** | logs | docker |
+| **Git** | diff | git |
 
 Each skill exposes concrete operations via `SkillDefinition` and `ToolDefinition`, enabling new capabilities without core system changes.
+
+#### Read-only data tools
+
+`files.*`, `docs.extract`, `knowledge.search`, `email.list`, `email.read`, `docker.logs` and
+`git.diff` are read-only. The workspace is mounted read-only at `/workspace`; credential-like
+names such as `.env`, private keys and `.netrc` are refused even when they are inside it.
+`docker.logs` accepts only container names matching `DOCKER_ALLOWED_CONTAINERS` and writes
+nothing to the Engine API. `git.diff` runs only `git diff`/`rev-parse` inside `GIT_REPO_PATH`,
+with external diff drivers and textconv disabled, a timeout and an output cap.
+
+`knowledge.ingest`, `email.draft` and `reminder.create` are side-effecting and therefore go
+through the Trust Engine like any other mutating tool. `email.draft` appends to the IMAP
+Drafts mailbox and reports `sent=false`; there is deliberately no `email.send` tool yet.
+Email tools return `EMAIL_NOT_CONFIGURED` until `EMAIL_ENABLED=true` and the IMAP values are
+supplied. `knowledge` uses local chunking and keyword retrieval; it does not call an external
+embedding provider.
 
 ### MCP Integration
 
@@ -187,6 +210,10 @@ Model Context Protocol as a standardized integration layer:
 ```
 Orchestrator → Plan Validator → Trust Engine → MCP/Tool Registry → Tool Executor
 ```
+
+Registration accepts `stdio`, SSE and streamable HTTP, including stored headers for
+remote transports. It stores configuration only: connecting remains a separate act
+gated by the Trust Engine. The orchestrator discovers enabled MCP tools before planning; each discovered tool call still requires authorization.
 
 Tool responses are treated as potentially untrusted data to reduce prompt injection risks.
 
@@ -227,11 +254,13 @@ Proactive agent execution triggered by schedules or events (reminders, periodic 
 
 ```bash
 # 1. Copy environment configuration
-cp backend/.env.example backend/.env
+python scripts/setup_local.py
 cp frontend/.env.example frontend/.env
 
 # 2. Configure required variables
 # Edit backend/.env with your NEBIUS_API_KEY
+# Open .nexus-access-key locally to get your login key; keep it private.
+# Existing database volume: follow docs/secure-setup.md before starting.
 # Edit frontend/.env with your API URL if needed
 
 # 3. Start the full stack
@@ -239,8 +268,8 @@ docker compose up --build
 
 # 4. Access the application
 # Frontend: http://localhost:3000
-# Backend API: http://localhost:8000
-# API Documentation: http://localhost:8000/docs
+# API: http://localhost:3000/api/v1 (Authorization: Bearer <access-key>)
+# PostgreSQL and backend ports are internal to Compose.
 ```
 
 ### Docker Compose Architecture
@@ -278,6 +307,8 @@ graph TB
 - Docker (optional, for containerized development)
 
 ### Backend Development
+
+Run `python scripts/setup_local.py` from the repository root first. The API requires an operator access key in development too. For local PostgreSQL, set `DATABASE_URL` in `backend/.env` to its actual credentials.
 
 ```bash
 cd backend
@@ -339,6 +370,8 @@ alembic history
 ```
 
 ## Security
+
+All user APIs require a bearer access key, including permission approvals. This is a single-operator application; key rotation preserves existing ownership. Missing authentication configuration closes the API. Health probes and the separately authenticated event webhook are the only exceptions. See [secure setup](docs/secure-setup.md).
 
 ### Security Invariants (Phase 13)
 
@@ -427,7 +460,7 @@ graph TB
 
 ```bash
 # Build images
-cd docker
+python scripts/setup_local.py
 docker compose build
 
 # Start production stack
@@ -435,7 +468,7 @@ docker compose up -d
 
 # Check health
 docker compose ps
-curl http://localhost:8000/health
+curl http://localhost:3000/api/v1/health
 
 # View logs
 docker compose logs -f
@@ -464,7 +497,7 @@ For detailed deployment documentation, see:
 | Component | Technology | Purpose |
 |-----------|-----------|---------|
 | **API Framework** | Python + FastAPI | REST API and application logic |
-| **Database** | PostgreSQL + pgvector | Persistence and semantic search |
+| **Database** | PostgreSQL + pgvector | Persistence; optional configured semantic search |
 | **LLM** | NVIDIA Nemotron 3.5 Super VL | Agent reasoning via Nebius API |
 | **Migrations** | Alembic | Database schema management |
 | **Testing** | pytest + pytest-asyncio | Automated testing |
@@ -476,7 +509,7 @@ For detailed deployment documentation, see:
 |-----------|-----------|---------|
 | **Framework** | React + TypeScript | Progressive Web App |
 | **Build Tool** | Vite | Fast development and production builds |
-| **HTTP Client** | Axios | API communication |
+| **HTTP Client** | Fetch | Authenticated same-origin API communication |
 | **State Management** | React Context | Application state |
 
 ### Infrastructure

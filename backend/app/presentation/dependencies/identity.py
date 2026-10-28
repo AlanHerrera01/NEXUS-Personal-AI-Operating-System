@@ -1,31 +1,14 @@
-"""Who a request belongs to.
-
-NEXUS has no authentication layer, so there is nothing that can honestly answer
-"who is calling" -- and the existing routes do not pretend otherwise, they accept
-a literal ``default-user-id`` placeholder.
-
-Always-On cannot copy that, because ownership is load-bearing here: it is the
-only thing separating one user's jobs from another's, and it is stored in a
-``uuid`` column. So rather than invent a fake identity, this module pins a single
-stable UUID as *the* local user and says so plainly.
-
-Two consequences, both deliberate:
-
-* every job, execution and rule on a deployment without auth belongs to the same
-  owner. That is not a security control and must not be described as one -- it is
-  the honest consequence of a single-operator deployment.
-* there is no request header, query parameter or token that can change the
-  owner. Accepting one would look like access control while being trivially
-  forged by anyone who can reach the API.
-
-When real authentication lands, this module is the single place that changes.
-"""
-
+"""Single-operator identity protected by the application authentication gate."""
 from __future__ import annotations
 
 from uuid import UUID, uuid5
 
-from fastapi import Depends
+import hashlib
+import hmac
+
+from fastapi import HTTPException, Request
+
+from app.config.settings import get_settings
 
 from app.domain.value_objects.entity_id import EntityId
 
@@ -39,16 +22,24 @@ LOCAL_USER_NAMESPACE = UUID("6e657875-7320-7573-6572-000000000000")
 LOCAL_USER_ID = uuid5(LOCAL_USER_NAMESPACE, "default-user-id")
 
 
+def require_authentication(request: Request) -> None:
+    # Health exposes no user data. The webhook authenticates its own secret.
+    if request.url.path in {"/health", "/api/v1/health", "/api/v1/events/trigger"}:
+        return
+    expected = get_settings().auth_token_hash
+    if not expected:
+        raise HTTPException(503, "Access is not configured. Run scripts/setup_local.py.")
+    authorization = request.headers.get("authorization", "")
+    scheme, _, token = authorization.partition(" ")
+    actual = hashlib.sha256(token.encode("utf-8")).hexdigest()
+    if scheme.lower() != "bearer" or not token or not hmac.compare_digest(actual, expected):
+        raise HTTPException(401, "Invalid or missing access key.", headers={"WWW-Authenticate": "Bearer"})
+
+
 def current_user_id() -> EntityId:
-    """The acting user for this request.
+    """Stable single-operator owner; the application gate authenticates requests.
 
-    A dependency rather than a module constant at every call site, so that adding
-    real authentication later means changing this function -- not auditing every
-    route for places that hardcoded the owner.
-
-    It is deliberately *not* overridable. It reads no header, query parameter or
-    body field, because with no authentication behind it, accepting a caller-supplied
-    identity would be access control in appearance only: anything that could reach
-    the API could claim any owner. The absence of that knob is the control.
+    Key rotation preserves ownership of existing data. This is not a multi-user
+    account system, and callers cannot choose an owner through a header.
     """
     return EntityId(LOCAL_USER_ID)

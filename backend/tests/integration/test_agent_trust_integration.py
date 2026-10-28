@@ -111,6 +111,7 @@ def sample_agent_run():
     return AgentRun(
         agent_id=EntityId.new(),
         user_request="Create a task",
+        user_id=EntityId.new(),
     )
 
 
@@ -182,7 +183,9 @@ class TestAgentTrustIntegration:
         )
         
         # Execute
-        result = await orchestrator.execute(sample_agent_run)
+        result = await orchestrator.execute(
+            sample_agent_run, user_id=str(sample_agent_run.user_id)
+        )
         
         # Verify: Tool should execute without permission request
         assert result.run.status == AgentRunStatus.COMPLETED
@@ -210,7 +213,9 @@ class TestAgentTrustIntegration:
         mock_tool_registry.definitions.return_value = [medium_risk_tool]
         
         # Execute
-        result = await orchestrator.execute(sample_agent_run)
+        result = await orchestrator.execute(
+            sample_agent_run, user_id=str(sample_agent_run.user_id)
+        )
         
         # Verify: Should pause for permission
         assert result.run.status == AgentRunStatus.WAITING_PERMISSION
@@ -238,7 +243,9 @@ class TestAgentTrustIntegration:
         mock_tool_registry.definitions.return_value = [high_risk_tool]
         
         # Execute
-        result = await orchestrator.execute(sample_agent_run)
+        result = await orchestrator.execute(
+            sample_agent_run, user_id=str(sample_agent_run.user_id)
+        )
         
         # Verify: Should be blocked
         assert result.run.status == AgentRunStatus.BLOCKED
@@ -254,10 +261,23 @@ class TestAgentTrustIntegration:
         mock_tool_registry,
         mock_tool_executor,
         mock_agent_action_repository,
+        approval_service,
         medium_risk_tool,
     ):
         # Setup: Run is waiting for permission
         sample_agent_run.set_status(AgentRunStatus.WAITING_PERMISSION)
+
+        # The run must have an actual pending request; resume refuses to infer
+        # consent from the status alone.
+        approval_service.create_request(
+            agent_run_id=sample_agent_run.id,
+            tool_name="calendar.create",
+            skill_name="calendar",
+            reason="Medium-risk action",
+            risk_level=RiskLevel.MEDIUM,
+            arguments_summary={"title": "Meeting"},
+            user_id=sample_agent_run.user_id,
+        )
         
         # Create a pending action
         pending_action = AgentAction(
@@ -275,7 +295,9 @@ class TestAgentTrustIntegration:
         )
         
         # Resume with approval
-        result = await orchestrator.resume(sample_agent_run, allow=True)
+        result = await orchestrator.resume(
+            sample_agent_run, allow=True, user_id=str(sample_agent_run.user_id)
+        )
         
         # Verify: Tool should execute
         assert result.run.status == AgentRunStatus.COMPLETED
@@ -288,10 +310,21 @@ class TestAgentTrustIntegration:
         sample_agent_run,
         mock_agent_action_repository,
         mock_tool_registry,
+        approval_service,
         medium_risk_tool,
     ):
         # Setup: Run is waiting for permission
         sample_agent_run.set_status(AgentRunStatus.WAITING_PERMISSION)
+
+        approval_service.create_request(
+            agent_run_id=sample_agent_run.id,
+            tool_name="calendar.create",
+            skill_name="calendar",
+            reason="Medium-risk action",
+            risk_level=RiskLevel.MEDIUM,
+            arguments_summary={"title": "Meeting"},
+            user_id=sample_agent_run.user_id,
+        )
         
         # Create a pending action
         pending_action = AgentAction(
@@ -304,7 +337,9 @@ class TestAgentTrustIntegration:
         mock_tool_registry.get.return_value = Mock(definition=Mock(return_value=medium_risk_tool))
         
         # Resume with rejection
-        result = await orchestrator.resume(sample_agent_run, allow=False)
+        result = await orchestrator.resume(
+            sample_agent_run, allow=False, user_id=str(sample_agent_run.user_id)
+        )
         
         # Verify: Action should be blocked
         assert result.run.status == AgentRunStatus.BLOCKED
@@ -331,14 +366,18 @@ class TestAgentTrustIntegration:
         mock_tool_registry.definitions.return_value = [medium_risk_tool]
         
         # First execution should pause
-        await orchestrator.execute(sample_agent_run)
+        await orchestrator.execute(
+            sample_agent_run, user_id=str(sample_agent_run.user_id)
+        )
         assert sample_agent_run.status == AgentRunStatus.WAITING_PERMISSION
         
         # Reset status and try again (simulating loop)
         sample_agent_run.set_status(AgentRunStatus.PLANNING)
         
         # Second execution should hit the limit
-        result = await orchestrator.execute(sample_agent_run)
+        result = await orchestrator.execute(
+            sample_agent_run, user_id=str(sample_agent_run.user_id)
+        )
         
         # Verify: Should be blocked due to limit
         assert result.run.status == AgentRunStatus.BLOCKED
@@ -365,14 +404,18 @@ class TestAgentTrustIntegration:
         mock_tool_registry.definitions.return_value = [high_risk_tool]
         
         # First execution should be blocked
-        await orchestrator.execute(sample_agent_run)
+        await orchestrator.execute(
+            sample_agent_run, user_id=str(sample_agent_run.user_id)
+        )
         assert sample_agent_run.status == AgentRunStatus.BLOCKED
         
         # Reset status and try again (simulating loop)
         sample_agent_run.set_status(AgentRunStatus.PLANNING)
         
         # Second execution should hit the limit
-        result = await orchestrator.execute(sample_agent_run)
+        result = await orchestrator.execute(
+            sample_agent_run, user_id=str(sample_agent_run.user_id)
+        )
         
         # Verify: Should be blocked due to limit
         assert result.run.status == AgentRunStatus.BLOCKED

@@ -99,6 +99,17 @@ def _safe(read, default):
         return default
 
 
+def _run_view(run: AgentRun) -> AgentRunView:
+    """The dashboard's projection of a run, shared by the active and recent lists."""
+    return AgentRunView(
+        run_id=str(run.id),
+        status=run.status.value,
+        user_request=run.user_request,
+        created_at=_iso(run.created_at),
+        updated_at=_iso(run.updated_at),
+    )
+
+
 def _risk_sort_key(request) -> tuple[int, float]:
     created = request.created_at
     if created.tzinfo is None:
@@ -164,16 +175,10 @@ async def get_overview(
         ),
         runs=ActiveRunsView(
             active_count=len(active_runs),
-            items=[
-                AgentRunView(
-                    run_id=str(run.id),
-                    status=run.status.value,
-                    user_request=run.user_request,
-                    created_at=_iso(run.created_at),
-                    updated_at=_iso(run.updated_at),
-                )
-                for run in active_runs[:10]
-            ],
+            items=[_run_view(run) for run in active_runs[:10]],
+            # The repository already returns the owner's runs newest-first, so
+            # this is a slice of the same read the active list comes from.
+            recent=[_run_view(run) for run in runs[:20]],
         ),
         authorizations=AuthorizationsView(
             pending_count=len(pending),

@@ -1,5 +1,7 @@
 import asyncio
 
+import pytest
+
 from app.application.agents.context_builder import AgentContextBuilder
 from app.application.agents.orchestrator import AgentOrchestrator
 from app.application.tools.executor import RegistryToolExecutor
@@ -31,6 +33,17 @@ class FakeRunRepository(AgentRunRepository):
 
     def get_by_id(self, run_id):
         return self.items.get(run_id)
+
+    def delete(self, run_id, user_id=None):
+        return self.items.pop(run_id, None) is not None
+
+    def list_by_conversation(self, conversation_id, user_id):
+        runs = [
+            run
+            for run in self.items.values()
+            if run.conversation_id == conversation_id and run.user_id == user_id
+        ]
+        return sorted(runs, key=lambda run: run.created_at)
 
 
 class FakeActionRepository(AgentActionRepository):
@@ -74,7 +87,16 @@ class LoopBrain(AgentBrain):
         return AgentDecision.tool_call("task.create", {"title": "repeat"})
 
 
-def make_orchestrator(brain, tool, max_iterations=10):
+class RecordingBrain(AgentBrain):
+    def __init__(self):
+        self.contexts = []
+
+    async def decide(self, agent_run, context, tool_definitions):
+        self.contexts.append(context)
+        return AgentDecision.final("ok")
+
+
+def make_orchestrator(brain, tool, max_iterations=10, run_repository=None):
     registry = InMemoryToolRegistry([tool])
     # Keyword arguments only. The orchestrator takes several same-typed
     # collaborators, and a positional list silently swaps them.
@@ -84,7 +106,7 @@ def make_orchestrator(brain, tool, max_iterations=10):
         tool_registry=registry,
         tool_executor=RegistryToolExecutor(registry),
         trust_engine=DeterministicTrustEngine(),
-        agent_run_repository=FakeRunRepository(),
+        agent_run_repository=run_repository or FakeRunRepository(),
         agent_action_repository=FakeActionRepository(),
         state_service=AgentRunStateService(),
         max_iterations=max_iterations,
@@ -97,6 +119,101 @@ def test_orchestrator_can_finish_without_tool() -> None:
 
     assert result.response == "Hello"
     assert run.status is AgentRunStatus.COMPLETED
+
+
+def test_a_conversation_replays_its_previous_exchange() -> None:
+    # A follow-up such as "¿y eso?" only means something in the thread it came
+    # from. The earlier run is stored with the conversation id, so the context
+    # has to carry it into the next turn.
+    repository = FakeRunRepository()
+    user_id = EntityId.new()
+    conversation_id = EntityId.new()
+    previous = AgentRun(
+        EntityId.new(),
+        "Consejos para mejorar en Arena Breakout",
+        user_id=user_id,
+        conversation_id=conversation_id,
+    )
+    previous.status = AgentRunStatus.COMPLETED
+    previous.response = "Prioriza extraer y usa munición Tier 3."
+    repository.save(previous)
+
+    brain = RecordingBrain()
+    orchestrated = make_orchestrator(brain, FakeTool(), run_repository=repository)
+    run = AgentRun(
+        EntityId.new(),
+        "¿Y qué munición me conviene?",
+        user_id=user_id,
+        conversation_id=conversation_id,
+    )
+
+    asyncio.run(orchestrated.execute(run, user_id=str(user_id)))
+
+    history = brain.contexts[0]["conversation_history"]
+    assert history == [
+        {
+            "request": "Consejos para mejorar en Arena Breakout",
+            "response": "Prioriza extraer y usa munición Tier 3.",
+        }
+    ]
+
+
+def test_a_legacy_final_envelope_is_replayed_as_prose() -> None:
+    repository = FakeRunRepository()
+    user_id = EntityId.new()
+    conversation_id = EntityId.new()
+    previous = AgentRun(
+        EntityId.new(),
+        "Guía de Arena Breakout",
+        user_id=user_id,
+        conversation_id=conversation_id,
+    )
+    previous.status = AgentRunStatus.COMPLETED
+    previous.response = '{"decision": "FINAL", "response": "Domina la extracción."}'
+    repository.save(previous)
+
+    brain = RecordingBrain()
+    orchestrated = make_orchestrator(brain, FakeTool(), run_repository=repository)
+    run = AgentRun(
+        EntityId.new(),
+        "Sigue con el tema",
+        user_id=user_id,
+        conversation_id=conversation_id,
+    )
+
+    asyncio.run(orchestrated.execute(run, user_id=str(user_id)))
+
+    history = brain.contexts[0]["conversation_history"]
+    assert history[0]["response"] == "Domina la extracción."
+
+
+def test_a_legacy_envelope_with_literal_newlines_is_replayed_as_prose() -> None:
+    repository = FakeRunRepository()
+    user_id = EntityId.new()
+    conversation_id = EntityId.new()
+    previous = AgentRun(
+        EntityId.new(),
+        "Guía de Arena Breakout",
+        user_id=user_id,
+        conversation_id=conversation_id,
+    )
+    previous.status = AgentRunStatus.COMPLETED
+    previous.response = '{"decision": "FINAL", "response": "Línea 1\nLínea 2"}'
+    repository.save(previous)
+
+    brain = RecordingBrain()
+    orchestrated = make_orchestrator(brain, FakeTool(), run_repository=repository)
+    run = AgentRun(
+        EntityId.new(),
+        "Sigue con el tema",
+        user_id=user_id,
+        conversation_id=conversation_id,
+    )
+
+    asyncio.run(orchestrated.execute(run, user_id=str(user_id)))
+
+    history = brain.contexts[0]["conversation_history"]
+    assert history[0]["response"] == "Línea 1\nLínea 2"
 
 
 def test_orchestrator_executes_tool_then_observes_and_finishes() -> None:
@@ -118,6 +235,59 @@ def test_orchestrator_pauses_for_confirmation() -> None:
     assert result.question == "Allow task.create?"
     assert run.status is AgentRunStatus.WAITING_PERMISSION
     assert tool.calls == 0
+
+
+def test_answering_a_question_continues_the_same_run() -> None:
+    # A run that stops to ask for a missing detail is not waiting on an
+    # authorization. Answering supplies the detail on the same run, which then
+    # finishes, instead of the question being re-asked or the run restarting.
+    orchestrated = make_orchestrator(
+        SequenceBrain(
+            AgentDecision.ask_user("¿Para qué fecha?"),
+            AgentDecision.final("Evento agendado"),
+        ),
+        FakeTool(),
+    )
+    run = AgentRun(EntityId.new(), "Agenda una alerta", user_id=EntityId.new())
+
+    paused = asyncio.run(orchestrated.execute(run, user_id=str(run.user_id)))
+    # The run is one object and answering moves it on, so its paused state is
+    # read now rather than after the reply has already completed it.
+    paused_status = paused.run.status
+    paused_question = paused.question
+    paused_question_field = run.question
+    resumed = asyncio.run(orchestrated.answer(run, "Mañana 20:50", user_id=str(run.user_id)))
+
+    assert paused_question == "¿Para qué fecha?"
+    assert paused_question_field == "¿Para qué fecha?"
+    assert paused_status is AgentRunStatus.WAITING_PERMISSION
+    assert resumed.response == "Evento agendado"
+    assert run.status is AgentRunStatus.COMPLETED
+    # The detail is folded into what the brain reads, so a run read back shows
+    # the clarification it was continued with.
+    assert "Mañana 20:50" in run.user_request
+    assert run.question is None
+
+
+def test_answering_a_run_that_is_not_waiting_is_refused() -> None:
+    orchestrated = make_orchestrator(SequenceBrain(AgentDecision.final("Hola")), FakeTool())
+    run = AgentRun(EntityId.new(), "Hola", user_id=EntityId.new())
+    asyncio.run(orchestrated.execute(run, user_id=str(run.user_id)))
+
+    with pytest.raises(ValueError):
+        asyncio.run(orchestrated.answer(run, "algo", user_id=str(run.user_id)))
+
+
+def test_answering_with_an_empty_reply_is_refused() -> None:
+    orchestrated = make_orchestrator(
+        SequenceBrain(AgentDecision.ask_user("¿Qué título?"), AgentDecision.final("ok")),
+        FakeTool(),
+    )
+    run = AgentRun(EntityId.new(), "Crea un evento", user_id=EntityId.new())
+    asyncio.run(orchestrated.execute(run, user_id=str(run.user_id)))
+
+    with pytest.raises(ValueError):
+        asyncio.run(orchestrated.answer(run, "   ", user_id=str(run.user_id)))
 
 
 def test_orchestrator_blocks_high_risk_tool() -> None:

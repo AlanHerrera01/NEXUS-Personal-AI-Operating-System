@@ -2,8 +2,10 @@ from app.infrastructure.persistence.models.agent_action_model import AgentAction
 from app.infrastructure.persistence.models.agent_model import AgentModel
 from app.infrastructure.persistence.models.agent_run_model import AgentRunModel
 from app.infrastructure.persistence.models.calendar_event_model import CalendarEventModel
+from app.infrastructure.persistence.models.conversation_model import ConversationModel
 from app.infrastructure.persistence.models.execution_plan_model import ExecutionPlanModel
 from app.infrastructure.persistence.models.job_execution_model import JobExecutionModel
+from app.infrastructure.persistence.models.knowledge_chunk_model import KnowledgeChunkModel
 from app.infrastructure.persistence.models.mcp_server_model import MCPServerModel
 from app.infrastructure.persistence.models.memory_model import MemoryModel
 from app.infrastructure.persistence.models.permission_model import PermissionModel
@@ -12,6 +14,7 @@ from app.infrastructure.persistence.models.permission_request_model import (
 )
 from app.infrastructure.persistence.models.plan_step_model import PlanStepModel
 from app.infrastructure.persistence.models.proactive_rule_model import ProactiveRuleModel
+from app.infrastructure.persistence.models.reminder_model import ReminderModel
 from app.infrastructure.persistence.models.runtime_session_model import RuntimeSessionModel
 from app.infrastructure.persistence.models.runtime_settings_model import (
     RuntimeSettingsModel,
@@ -26,14 +29,17 @@ __all__ = [
     "AgentModel",
     "AgentRunModel",
     "CalendarEventModel",
+    "ConversationModel",
     "ExecutionPlanModel",
     "JobExecutionModel",
+    "KnowledgeChunkModel",
     "MCPServerModel",
     "MemoryModel",
     "PermissionModel",
     "PermissionRequestModel",
     "PlanStepModel",
     "ProactiveRuleModel",
+    "ReminderModel",
     "RuntimeSessionModel",
     "RuntimeSettingsModel",
     "ScheduledJobModel",

@@ -3,17 +3,27 @@ from fastapi.testclient import TestClient
 from sqlalchemy import delete
 
 from app.domain.entities.agent import Agent
+from app.domain.value_objects.entity_id import EntityId
 from app.infrastructure.persistence.database import SessionFactory
 from app.infrastructure.persistence.models import AgentModel, TaskModel
 from app.infrastructure.persistence.repositories.agent_repository import SqlAlchemyAgentRepository
 from app.main import app
+from app.presentation.dependencies.identity import LOCAL_USER_ID
 
 pytestmark = pytest.mark.integration
 
 
-def test_agent_run_executes_task_tool_and_completes() -> None:
+def test_agent_run_executes_task_tool_and_completes(monkeypatch) -> None:
+    # This verifies API -> policy -> tool -> database, without spending provider
+    # credits or depending on a developer's real LLM credentials.
+    from app.application.agents.rule_based_brain import RuleBasedAgentBrain
+    from app.presentation.dependencies import agent as agent_dependencies
+
+    monkeypatch.setattr(agent_dependencies, "build_agent_brain", lambda _settings: RuleBasedAgentBrain())
     session = SessionFactory()
-    agent = SqlAlchemyAgentRepository(session).save(Agent(name="Orchestrator integration"))
+    agent = SqlAlchemyAgentRepository(session).save(
+        Agent(name="Orchestrator integration", user_id=EntityId(LOCAL_USER_ID))
+    )
     session.close()
     client = TestClient(app)
 

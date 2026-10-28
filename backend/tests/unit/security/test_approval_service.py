@@ -46,6 +46,8 @@ class TestApprovalService:
             reason="Medium-risk action requires confirmation",
             risk_level=RiskLevel.MEDIUM,
             arguments_summary={"title": "Meeting"},
+            # An owner is required: a request records who is being asked.
+            user_id=EntityId.new(),
         )
         
         assert isinstance(request, PermissionRequest)

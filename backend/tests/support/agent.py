@@ -50,6 +50,17 @@ class FakeRunRepository(AgentRunRepository):
     def get_by_id(self, run_id):
         return self.items.get(run_id)
 
+    def delete(self, run_id, user_id=None):
+        return self.items.pop(run_id, None) is not None
+
+    def list_by_conversation(self, conversation_id, user_id):
+        runs = [
+            run
+            for run in self.items.values()
+            if run.conversation_id == conversation_id and run.user_id == user_id
+        ]
+        return sorted(runs, key=lambda run: run.created_at)
+
 
 class FakeActionRepository(AgentActionRepository):
     def __init__(self) -> None:

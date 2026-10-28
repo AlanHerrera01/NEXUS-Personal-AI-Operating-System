@@ -31,5 +31,7 @@ class GitHubPullRequestSummary(ToolOutput):
 
 
 def require_acting_user(context: object) -> str:
-    """Placeholder: GitHub tools will require user authentication context."""
-    return "authenticated_user"
+    user_id = getattr(context, "user_id", None)
+    if user_id is None:
+        raise ValueError("authenticated operator required")
+    return str(user_id)

@@ -148,6 +148,12 @@ def test_overview_summarises_owned_state() -> None:
     assert body["runs"]["active_count"] == 1
     assert body["runs"]["items"][0]["run_id"] == str(active_run.id)
     assert body["runs"]["items"][0]["status"] == "EXECUTING"
+    # The recent list is every run the owner has, in-flight or not: a finished
+    # run must still be reachable so its thread can be reopened.
+    assert {item["run_id"] for item in body["runs"]["recent"]} == {
+        str(active_run.id),
+        str(finished_run.id),
+    }
     assert body["trust"]["allow_grants"] == 1
     assert body["trust"]["deny_grants"] == 1
     assert body["trust"]["total_grants"] == 2
@@ -170,7 +176,7 @@ def test_overview_degrades_when_storage_is_unavailable() -> None:
 
     assert response.status_code == 200
     body = response.json()
-    assert body["runs"] == {"active_count": 0, "items": []}
+    assert body["runs"] == {"active_count": 0, "items": [], "recent": []}
     assert body["authorizations"] == {"pending_count": 0, "items": []}
     assert body["trust"]["total_grants"] == 0
     assert body["agent"] is None

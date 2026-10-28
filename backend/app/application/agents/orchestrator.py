@@ -1,4 +1,6 @@
+import json
 import logging
+import re
 import time
 from dataclasses import dataclass, field
 
@@ -18,10 +20,11 @@ from app.domain.ports.plan_validator import (
     ProposedAction,
     ProposedPlan,
 )
-from app.domain.ports.tool import ToolContext, ToolDefinition
+from app.domain.ports.tool import Tool, ToolContext, ToolDefinition
 from app.domain.ports.tool_catalog import ToolCatalog
 from app.domain.ports.tool_executor import ToolExecutor
 from app.domain.ports.tool_registry import ToolRegistry
+from app.domain.ports.mcp_tool_provider import MCPToolProviderPort
 from app.domain.ports.trust_engine import TrustEngine
 from app.domain.services.agent_run_state_service import AgentRunStateService
 from app.domain.value_objects.agent_action_status import AgentActionStatus
@@ -35,6 +38,51 @@ from app.domain.value_objects.permission_decision import PermissionDecision
 from app.domain.value_objects.runtime_event_type import AuthorizationEventType
 
 logger = logging.getLogger("nexus.agents.orchestrator")
+
+#: How many earlier exchanges are replayed into the model context. A chat is a
+#: conversation, not a pile of unrelated runs; the window is bounded so a long
+#: thread cannot crowd out the current request.
+MAX_CONVERSATION_TURNS = 8
+
+#: Runs still in flight have no answer to replay yet and are skipped.
+_IN_PROGRESS = frozenset(
+    {
+        AgentRunStatus.CREATED,
+        AgentRunStatus.CONTEXT_LOADING,
+        AgentRunStatus.PLANNING,
+        AgentRunStatus.EXECUTING,
+        AgentRunStatus.OBSERVING,
+    }
+)
+
+
+def _history_answer(text: str | None) -> str:
+    """Recover the prose from a legacy decision envelope, if one is present."""
+    value = (text or "").strip()
+    if not value.startswith("{"):
+        return value
+    try:
+        payload = json.loads(value)
+    except (TypeError, ValueError):
+        payload = None
+    if isinstance(payload, dict) and str(payload.get("decision", "")).upper() == "FINAL":
+        response = payload.get("response")
+        if isinstance(response, str):
+            return response.strip()
+
+    # Old runs can contain a FINAL envelope whose response has literal newlines,
+    # which is invalid JSON. The field is still unambiguous; escape only those
+    # control characters so the next model sees prose instead of the wrapper.
+    match = re.search(r'"response"\s*:\s*"((?:[^"\\]|\\.)*)"', value, re.DOTALL)
+    if match:
+        raw = match.group(1).replace("\r\n", "\n").replace("\n", "\\n")
+        try:
+            decoded = json.loads(f'"{raw}"')
+            if isinstance(decoded, str) and decoded.strip():
+                return decoded.strip()
+        except (TypeError, ValueError):
+            pass
+    return value
 
 
 @dataclass(frozen=True)
@@ -85,6 +133,7 @@ class AgentOrchestrator:
         max_denied_actions: int = 5,
         max_runtime_seconds: float = 300.0,
         max_tracked_runs: int = 10_000,
+        mcp_tool_provider: MCPToolProviderPort | None = None,
     ) -> None:
         self.agent_brain = agent_brain
         self.context_builder = context_builder
@@ -108,6 +157,7 @@ class AgentOrchestrator:
         self.max_denied_actions = max_denied_actions
         self.max_runtime_seconds = max_runtime_seconds
         self.max_tracked_runs = max_tracked_runs
+        self.mcp_tool_provider = mcp_tool_provider
         # Runaway guards are properties of the *run*, not of one call into
         # execute(). Keeping them per run is what stops a caller from simply
         # re-entering execute() to reset the budget.
@@ -155,7 +205,52 @@ class AgentOrchestrator:
             return False
         return time.monotonic() > deadline
 
-    def _begin_turn(self, run: AgentRun, user_id_entity: EntityId | None) -> dict:
+    def _conversation_history(
+        self, run: AgentRun, user_id_entity: EntityId | None
+    ) -> list[dict[str, str]]:
+        """Earlier exchanges in the same conversation, oldest first.
+
+        A run carries its conversation id, so the previous turns are already
+        stored. Replaying them is what lets "y eso?" or "pero lo buscaste en la
+        web" refer to the subject of the thread instead of arriving as a brand
+        new request with no context. Owner-scoped like every other run read, and
+        bounded so a long thread cannot crowd out the current request.
+        """
+        if run.conversation_id is None or user_id_entity is None:
+            return []
+
+        history: list[dict[str, str]] = []
+        for previous in self.agent_run_repository.list_by_conversation(
+            run.conversation_id, user_id_entity
+        ):
+            if previous.id == run.id or previous.status in _IN_PROGRESS:
+                continue
+            request = (previous.user_request or "").strip()
+            answer = _history_answer(previous.response or previous.question)
+            if not request and not answer:
+                continue
+            history.append({"request": request, "response": answer})
+        return history[-MAX_CONVERSATION_TURNS:]
+
+    def _build_context(
+        self,
+        run: AgentRun,
+        available: list[ToolDefinition],
+        user_id_entity: EntityId | None,
+    ) -> dict:
+        return self.context_builder.build(
+            run,
+            available,
+            user_id=user_id_entity,
+            conversation_history=self._conversation_history(run, user_id_entity),
+        )
+
+    def _begin_turn(
+        self,
+        run: AgentRun,
+        user_id_entity: EntityId | None,
+        extra_definitions: list[ToolDefinition] | None = None,
+    ) -> dict:
         """Enter the reasoning loop, loading context only on a run's first turn.
 
         The resolved identity travels in the turn so every audit entry in the loop
@@ -164,10 +259,10 @@ class AgentOrchestrator:
         """
         if run.status is AgentRunStatus.CREATED:
             self._transition(run, AgentRunStatus.CONTEXT_LOADING)
-            available = self.available_tools(run.user_request)
-            context = self.context_builder.build(
-                run, available, user_id=user_id_entity
+            available = self._merge_definitions(
+                self.available_tools(run.user_request), extra_definitions
             )
+            context = self._build_context(run, available, user_id_entity)
             self._transition(run, AgentRunStatus.PLANNING)
             return {
                 "context": context,
@@ -180,11 +275,11 @@ class AgentOrchestrator:
         # phase would be an illegal transition and would throw away what the run
         # has already established, so the existing budget carries over instead.
         self._transition(run, AgentRunStatus.PLANNING)
-        available = self.available_tools(run.user_request)
+        available = self._merge_definitions(
+            self.available_tools(run.user_request), extra_definitions
+        )
         return {
-            "context": self.context_builder.build(
-                run, available, user_id=user_id_entity
-            ),
+            "context": self._build_context(run, available, user_id_entity),
             "available": available,
             "counters": self._budget(run),
             "user_id": user_id_entity,
@@ -194,6 +289,47 @@ class AgentOrchestrator:
         if self.tool_catalog is not None:
             return self.tool_catalog.available_definitions(request)
         return self.tool_registry.definitions()
+
+    @staticmethod
+    def _merge_definitions(
+        base: list[ToolDefinition], extra: list[ToolDefinition] | None
+    ) -> list[ToolDefinition]:
+        if not extra:
+            return base
+        known = {definition.name for definition in base}
+        return [*base, *(definition for definition in extra if definition.name not in known)]
+
+    async def _load_mcp_tools(self, user_id_entity: EntityId | None) -> list[Tool]:
+        """Discover MCP tools for this run and register them temporarily.
+
+        Discovery failures are deliberately non-fatal. An unreachable MCP
+        server should remove its own tools from the run, not turn every chat
+        request into a 500. The panel reports the reason separately.
+        """
+        if self.mcp_tool_provider is None or user_id_entity is None:
+            return []
+        try:
+            discovered = await self.mcp_tool_provider.tools_for_owner(user_id_entity)
+        except Exception:  # noqa: BLE001 - discovery is an enhancement, not the run
+            logger.exception("MCP tool discovery failed; continuing without MCP tools")
+            return []
+
+        registered: list[Tool] = []
+        for tool in discovered:
+            try:
+                self.tool_registry.register(tool)
+            except ValueError:
+                logger.warning(
+                    "MCP tool %s collides with an existing tool; skipped",
+                    tool.definition().name,
+                )
+                continue
+            registered.append(tool)
+        return registered
+
+    def _release_mcp_tools(self, tools: list[Tool]) -> None:
+        for tool in tools:
+            self.tool_registry.unregister(tool.definition().name)
 
     def _tool_context(
         self,
@@ -228,6 +364,7 @@ class AgentOrchestrator:
         available_names: frozenset[str],
         *,
         human_approved: bool = False,
+        existing_action: AgentAction | None = None,
     ) -> _GateOutcome:
         """Plan validation, then Trust Engine, then mint proof. In that order.
 
@@ -241,6 +378,11 @@ class AgentOrchestrator:
         approves an action the current policy forbids gets an audit event and a
         refusal, because an approval issued minutes ago under a policy that has
         since changed is not a permanent authorisation.
+
+        ``existing_action`` is set by ``resume`` for the action it already has on
+        record. The decision is written onto that action instead of a fresh one,
+        so a resumed run does not accumulate a second copy of the step it was
+        asked about.
         """
         tool_name = tool.definition().name
 
@@ -279,6 +421,7 @@ class AgentOrchestrator:
                     risk_level=tool.definition().risk_level,
                     decision=PermissionDecision.DENY,
                     policy_id="plan_validator",
+                    existing=existing_action,
                 )
                 action.error_message = reason
                 return _GateOutcome(
@@ -298,16 +441,31 @@ class AgentOrchestrator:
             arguments,
         )
 
+        # An ASK means "a person must confirm this before it runs". A resume is
+        # only ever reached because that person just answered the question, so
+        # the confirmation is satisfied and the action proceeds. This is the one
+        # and only thing that turns an ASK into an execution: a DENY is never
+        # converted, and every check above (plan validation, the policy engine)
+        # still ran. Without it the confirmation requirement could never be
+        # satisfied -- a tool that asks (requires_confirmation, or a medium-risk
+        # policy) would re-ask on every resume instead of ever executing.
+        decision = evaluation.decision
+        reason = evaluation.reason
+        if decision is PermissionDecision.ASK and human_approved:
+            decision = PermissionDecision.ALLOW
+            reason = f"approved by the user; {evaluation.reason}"
+
         action = self._record_action(
             run,
             tool,
             arguments,
             risk_level=evaluation.risk_level,
-            decision=evaluation.decision,
+            decision=decision,
             policy_id=evaluation.policy_id,
+            existing=existing_action,
         )
 
-        if evaluation.decision is PermissionDecision.ALLOW and human_approved:
+        if decision is PermissionDecision.ALLOW:
             # Recorded, because "a human approved it and the policy allowed it"
             # is a different provenance from "the policy allowed it", and the two
             # must be distinguishable when auditing what ran.
@@ -316,33 +474,22 @@ class AgentOrchestrator:
                 user_id=user_id_entity,
                 run=run,
                 tool_name=tool_name,
-                decision=evaluation.decision.value,
+                decision=decision.value,
                 risk_level=evaluation.risk_level.value,
                 policy_id=evaluation.policy_id,
-                reason=evaluation.reason,
-                extra={"human_approved": True},
+                reason=reason,
+                extra={"human_approved": True} if human_approved else None,
             )
-        elif evaluation.decision is PermissionDecision.ALLOW:
-            self._audit(
-                AuthorizationEventType.TOOL_ALLOWED,
-                user_id=user_id_entity,
-                run=run,
-                tool_name=tool_name,
-                decision=evaluation.decision.value,
-                risk_level=evaluation.risk_level.value,
-                policy_id=evaluation.policy_id,
-                reason=evaluation.reason,
-            )
-        elif evaluation.decision is PermissionDecision.ASK:
+        elif decision is PermissionDecision.ASK:
             self._audit(
                 AuthorizationEventType.TOOL_DENIED,
                 user_id=user_id_entity,
                 run=run,
                 tool_name=tool_name,
-                decision=evaluation.decision.value,
+                decision=decision.value,
                 risk_level=evaluation.risk_level.value,
                 policy_id=evaluation.policy_id,
-                reason=f"escalated for approval: {evaluation.reason}",
+                reason=f"escalated for approval: {reason}",
             )
         else:
             event = (
@@ -355,15 +502,15 @@ class AgentOrchestrator:
                 user_id=user_id_entity,
                 run=run,
                 tool_name=tool_name,
-                decision=evaluation.decision.value,
+                decision=decision.value,
                 risk_level=evaluation.risk_level.value,
                 policy_id=evaluation.policy_id,
-                reason=evaluation.reason,
+                reason=reason,
             )
 
         # -- 3. proof, only for an ALLOW -------------------------------------
         authorization = None
-        if evaluation.decision is PermissionDecision.ALLOW:
+        if decision is PermissionDecision.ALLOW:
             authorization = ExecutionAuthorization.allow(
                 agent_id=run.agent_id,
                 agent_run_id=run.id,
@@ -374,8 +521,8 @@ class AgentOrchestrator:
 
         return _GateOutcome(
             action=action,
-            decision=evaluation.decision,
-            reason=evaluation.reason,
+            decision=decision,
+            reason=reason,
             policy_id=evaluation.policy_id,
             requires_confirmation=evaluation.requires_confirmation,
             authorization=authorization,
@@ -390,16 +537,28 @@ class AgentOrchestrator:
         risk_level,
         decision: PermissionDecision,
         policy_id: str,
+        existing: AgentAction | None = None,
     ) -> AgentAction:
-        action = AgentAction(
-            run.id,
-            tool.definition().skill_name,
-            tool.definition().name,
-            arguments,
-            risk_level=risk_level,
-            permission_decision=decision,
-            policy_result=policy_id,
-        )
+        if existing is None:
+            action = AgentAction(
+                run.id,
+                tool.definition().skill_name,
+                tool.definition().name,
+                arguments,
+                risk_level=risk_level,
+                permission_decision=decision,
+                policy_result=policy_id,
+            )
+        else:
+            # Resuming re-decides the action that was proposed, rather than
+            # recording a second copy of it: the step the operator approved and
+            # the step that ran must be one row, or a reopened run reads back
+            # with its plan step duplicated. The earlier ASK is not lost -- it is
+            # in the audit trail and in the permission request that was raised.
+            action = existing
+            action.risk_level = risk_level
+            action.permission_decision = decision
+            action.policy_result = policy_id
         self.agent_action_repository.save(action)
         return action
 
@@ -431,7 +590,16 @@ class AgentOrchestrator:
 
     async def execute(self, run: AgentRun, user_id: str | None = None) -> AgentExecutionResult:
         user_id_entity = EntityId.from_string(user_id) if user_id else None
-        turn = self._begin_turn(run, user_id_entity)
+        mcp_tools = await self._load_mcp_tools(user_id_entity)
+        try:
+            turn = self._begin_turn(
+                run,
+                user_id_entity,
+                extra_definitions=[tool.definition() for tool in mcp_tools],
+            )
+        except BaseException:
+            self._release_mcp_tools(mcp_tools)
+            raise
         context = turn["context"]
         available = turn["available"]
         observations = []
@@ -446,20 +614,30 @@ class AgentOrchestrator:
                     # An unrecognised decision is never coerced into a tool call.
                     # Falling through would let a malformed brain response start
                     # executing things.
-                    self._transition(run, AgentRunStatus.FAILED)
+                    self._transition(
+                        run,
+                        AgentRunStatus.FAILED,
+                        response="Agent returned an unsupported decision",
+                    )
                     return AgentExecutionResult(
                         run,
                         response="Agent returned an unsupported decision",
                         observations=observations,
                     )
                 if decision_type is AgentDecisionType.FINAL:
-                    self._transition(run, AgentRunStatus.COMPLETED)
+                    self._transition(
+                        run, AgentRunStatus.COMPLETED, response=decision.response
+                    )
                     return AgentExecutionResult(run, decision.response, observations=observations)
                 if decision_type is AgentDecisionType.ASK_USER:
-                    self._transition(run, AgentRunStatus.WAITING_PERMISSION)
+                    self._transition(
+                        run, AgentRunStatus.WAITING_PERMISSION, question=decision.question
+                    )
                     return AgentExecutionResult(run, question=decision.question, observations=observations)
                 if decision_type is AgentDecisionType.ERROR:
-                    self._transition(run, AgentRunStatus.FAILED)
+                    self._transition(
+                        run, AgentRunStatus.FAILED, response=decision.error
+                    )
                     return AgentExecutionResult(run, response=decision.error, observations=observations)
                 if self._runtime_exhausted(run):
                     self._audit(
@@ -469,7 +647,11 @@ class AgentOrchestrator:
                         tool_name=decision.tool_name,
                         reason=f"runtime budget exceeded after {self.max_runtime_seconds}s",
                     )
-                    self._transition(run, AgentRunStatus.FAILED)
+                    self._transition(
+                        run,
+                        AgentRunStatus.FAILED,
+                        response="Agent run exceeded its time budget",
+                    )
                     return AgentExecutionResult(
                         run, response="Agent run exceeded its time budget", observations=observations
                     )
@@ -481,7 +663,11 @@ class AgentOrchestrator:
                         tool_name=decision.tool_name,
                         reason=f"tool-call budget exhausted at {self.max_tool_calls}",
                     )
-                    self._transition(run, AgentRunStatus.FAILED)
+                    self._transition(
+                        run,
+                        AgentRunStatus.FAILED,
+                        response="Agent tool-call limit reached",
+                    )
                     return AgentExecutionResult(run, response="Agent tool-call limit reached", observations=observations)
                 if counters["permission_requests"] >= self.max_permission_requests:
                     self._audit(
@@ -491,7 +677,11 @@ class AgentOrchestrator:
                         tool_name=decision.tool_name,
                         reason=f"permission-request budget exhausted at {self.max_permission_requests}",
                     )
-                    self._transition(run, AgentRunStatus.BLOCKED)
+                    self._transition(
+                        run,
+                        AgentRunStatus.BLOCKED,
+                        response="Agent permission request limit reached",
+                    )
                     return AgentExecutionResult(run, response="Agent permission request limit reached", observations=observations)
                 if counters["denied_actions"] >= self.max_denied_actions:
                     self._audit(
@@ -501,15 +691,27 @@ class AgentOrchestrator:
                         tool_name=decision.tool_name,
                         reason=f"denied-action budget exhausted at {self.max_denied_actions}",
                     )
-                    self._transition(run, AgentRunStatus.BLOCKED)
+                    self._transition(
+                        run,
+                        AgentRunStatus.BLOCKED,
+                        response="Agent denied action limit reached",
+                    )
                     return AgentExecutionResult(run, response="Agent denied action limit reached", observations=observations)
 
                 if (decision.tool_name or "") not in available_names:
-                    self._transition(run, AgentRunStatus.FAILED)
+                    self._transition(
+                        run,
+                        AgentRunStatus.FAILED,
+                        response="Requested tool is not available",
+                    )
                     return AgentExecutionResult(run, response="Requested tool is not available", observations=observations)
                 tool = self.tool_registry.get(decision.tool_name)
                 if tool is None:
-                    self._transition(run, AgentRunStatus.FAILED)
+                    self._transition(
+                        run,
+                        AgentRunStatus.FAILED,
+                        response="Requested tool is not available",
+                    )
                     return AgentExecutionResult(run, response="Requested tool is not available", observations=observations)
 
                 # The one authorization path. Plan validation and the Trust Engine
@@ -529,7 +731,9 @@ class AgentOrchestrator:
                     action.error_message = gate.reason
                     self.agent_action_repository.save(action)
                     counters["denied_actions"] += 1
-                    self._transition(run, AgentRunStatus.BLOCKED)
+                    self._transition(
+                        run, AgentRunStatus.BLOCKED, response="Action blocked by policy"
+                    )
                     return AgentExecutionResult(run, response="Action blocked by policy", observations=observations, reason=gate.reason)
 
                 if gate.decision is PermissionDecision.ASK:
@@ -546,7 +750,11 @@ class AgentOrchestrator:
                         )
                         counters["permission_requests"] += 1
 
-                    self._transition(run, AgentRunStatus.WAITING_PERMISSION)
+                    self._transition(
+                        run,
+                        AgentRunStatus.WAITING_PERMISSION,
+                        question=f"Allow {tool.definition().name}?",
+                    )
                     return AgentExecutionResult(
                         run,
                         question=f"Allow {tool.definition().name}?",
@@ -565,9 +773,14 @@ class AgentOrchestrator:
                 counters["tool_calls"] += 1
                 self._transition(run, AgentRunStatus.PLANNING)
 
-            self._transition(run, AgentRunStatus.FAILED)
+            self._transition(
+                run,
+                AgentRunStatus.FAILED,
+                response="Agent iteration limit reached",
+            )
             return AgentExecutionResult(run, response="Agent iteration limit reached", observations=observations)
         finally:
+            self._release_mcp_tools(mcp_tools)
             self.agent_run_repository.save(run)
 
     async def _dispatch(
@@ -620,7 +833,9 @@ class AgentOrchestrator:
             action.transition_to(AgentActionStatus.FAILED)
             action.execution_status = "FAILED"
             self.agent_action_repository.save(action)
-            self._transition(run, AgentRunStatus.FAILED)
+            self._transition(
+                run, AgentRunStatus.FAILED, response=f"Runtime unavailable: {error}"
+            )
             return AgentExecutionResult(run, response=f"Runtime unavailable: {error}")
 
         self._transition(run, AgentRunStatus.OBSERVING)
@@ -647,9 +862,6 @@ class AgentOrchestrator:
         if not actions:
             raise ValueError("pending action not found")
         action = actions[-1]
-        tool = self.tool_registry.get(action.action_name)
-        if tool is None:
-            raise ValueError("pending tool not found")
 
         # Identity is resolved once and bound to the execution context. Passing
         # the caller down by string and coercing it inside the run is what let a
@@ -664,6 +876,31 @@ class AgentOrchestrator:
             )
             raise AuthorizationError("resuming a run requires the acting user")
 
+        # A pending MCP tool lives in the request-scoped registry only for the
+        # run that discovered it. Resume builds a new orchestrator, so the same
+        # owner-scoped discovery has to happen before the pending tool can be
+        # looked up again. Discovery failure surfaces as "pending tool not
+        # found", which is the honest outcome: the action cannot run. A denial
+        # never needs the tool, so it does not contact the server.
+        mcp_tools: list[Tool] = []
+        if allow and action.action_name.startswith("mcp."):
+            mcp_tools = await self._load_mcp_tools(user_id_entity)
+        try:
+            return await self._resume_authorized(run, action, allow, user_id_entity)
+        finally:
+            self._release_mcp_tools(mcp_tools)
+
+    async def _resume_authorized(
+        self,
+        run: AgentRun,
+        action: AgentAction,
+        allow: bool,
+        user_id_entity: EntityId,
+    ) -> AgentExecutionResult:
+        tool = self.tool_registry.get(action.action_name)
+        if tool is None:
+            raise ValueError("pending tool not found")
+
         counters = self._budget(run)
         if counters["tool_calls"] >= self.max_tool_calls:
             # Resuming repeatedly is a way to keep dispatching actions against a
@@ -676,7 +913,9 @@ class AgentOrchestrator:
                 tool_name=action.action_name,
                 reason=f"tool-call budget already exhausted at {self.max_tool_calls}",
             )
-            self._transition(run, AgentRunStatus.BLOCKED)
+            self._transition(
+                run, AgentRunStatus.BLOCKED, response="Agent tool-call limit reached"
+            )
             return AgentExecutionResult(run, response="Agent tool-call limit reached")
 
         if self._runtime_exhausted(run):
@@ -687,7 +926,11 @@ class AgentOrchestrator:
                 tool_name=action.action_name,
                 reason=f"resume attempted after the {self.max_runtime_seconds}s run budget expired",
             )
-            self._transition(run, AgentRunStatus.FAILED)
+            self._transition(
+                run,
+                AgentRunStatus.FAILED,
+                response="Agent run exceeded its time budget",
+            )
             return AgentExecutionResult(
                 run, response="Agent run exceeded its time budget"
             )
@@ -732,7 +975,9 @@ class AgentOrchestrator:
             action.transition_to(AgentActionStatus.BLOCKED)
             action.error_message = "Approval request expired"
             self.agent_action_repository.save(action)
-            self._transition(run, AgentRunStatus.BLOCKED)
+            self._transition(
+                run, AgentRunStatus.BLOCKED, response="Approval request expired"
+            )
             return AgentExecutionResult(run, response="Approval request expired")
 
         if not allow:
@@ -741,7 +986,9 @@ class AgentOrchestrator:
             action.transition_to(AgentActionStatus.BLOCKED)
             action.error_message = "Action denied by user"
             self.agent_action_repository.save(action)
-            self._transition(run, AgentRunStatus.BLOCKED)
+            self._transition(
+                run, AgentRunStatus.BLOCKED, response="Action denied by user"
+            )
             return AgentExecutionResult(run, response="Action denied by user")
 
         # Re-decide under current policy. The human approved this action; the
@@ -759,6 +1006,7 @@ class AgentOrchestrator:
             user_id_entity,
             available_names,
             human_approved=True,
+            existing_action=action,
         )
 
         if gate.decision is PermissionDecision.ALLOW:
@@ -782,7 +1030,11 @@ class AgentOrchestrator:
             action.error_message = gate.reason
             self.agent_action_repository.save(action)
             counters["denied_actions"] += 1
-            self._transition(run, AgentRunStatus.BLOCKED)
+            self._transition(
+                run,
+                AgentRunStatus.BLOCKED,
+                response="Action blocked by policy despite approval",
+            )
             return AgentExecutionResult(
                 run,
                 response="Action blocked by policy despite approval",
@@ -790,8 +1042,10 @@ class AgentOrchestrator:
             )
 
         if gate.decision is PermissionDecision.ASK:
-            # Still asks under current policy. The approval stands recorded, but
-            # it does not satisfy a second, stricter question.
+            # Defensive: resume always marks the decision human-approved, and a
+            # human approval satisfies an ASK in _gate, so a resumed action does
+            # not normally land here. Kept so that a caller who resumes without
+            # that flag is asked again rather than silently executed.
             self._audit(
                 AuthorizationEventType.APPROVAL_OVERRULED,
                 user_id=user_id_entity,
@@ -802,7 +1056,11 @@ class AgentOrchestrator:
                 reason=f"policy now requires approval again: {gate.reason}",
                 extra={"human_approved": True},
             )
-            self._transition(run, AgentRunStatus.WAITING_PERMISSION)
+            self._transition(
+                run,
+                AgentRunStatus.WAITING_PERMISSION,
+                question=f"Allow {tool.definition().name}?",
+            )
             return AgentExecutionResult(
                 run,
                 question=f"Allow {tool.definition().name}?",
@@ -813,15 +1071,61 @@ class AgentOrchestrator:
         counters["tool_calls"] += 1
         if isinstance(outcome, AgentExecutionResult):
             return outcome
+        # The approved action ran and the resumed turn is over. Nothing else
+        # continues a resumed run, and OBSERVING is not terminal, so without this
+        # the run would sit in OBSERVING forever after its action completed.
+        self._transition(
+            run,
+            AgentRunStatus.COMPLETED if outcome.success else AgentRunStatus.FAILED,
+            response="Action completed" if outcome.success else "Action failed",
+        )
         return AgentExecutionResult(
             run,
             response="Action completed" if outcome.success else "Action failed",
             observations=[outcome],
         )
 
-    def _transition(self, run: AgentRun, status: AgentRunStatus) -> None:
+    async def answer(
+        self, run: AgentRun, answer: str, user_id: str | None = None
+    ) -> AgentExecutionResult:
+        """Continue a run that stopped to ask the user for missing detail.
+
+        The counterpart to :meth:`resume`: that one answers an authorization,
+        this one answers a question. A run waiting on a live permission request
+        is refused here, so answering can never stand in for approving.
+        """
+        if run.status is not AgentRunStatus.WAITING_PERMISSION:
+            raise ValueError("agent run is not waiting for an answer")
+        if self.approval_service is not None and self.approval_service.get_pending_by_run(run.id):
+            raise ValueError("agent run is waiting for a permission decision, not an answer")
+        detail = (answer or "").strip()
+        if not detail:
+            raise ValueError("answer must not be empty")
+        # The clarification is folded into the request the brain reads, because
+        # that is what the prompt is built from; a side channel the planner never
+        # sees would have it ask the same question again. Clearing the question
+        # with it keeps the run from reporting a wait it is no longer in.
+        run.user_request = f"{run.user_request}\n\nAclaración del usuario: {detail}"
+        run.question = None
+        self.agent_run_repository.save(run)
+        return await self.execute(run, user_id=user_id)
+
+    def _transition(
+        self,
+        run: AgentRun,
+        status: AgentRunStatus,
+        *,
+        response: str | None = None,
+        question: str | None = None,
+    ) -> None:
         # Re-entering a run can legitimately ask for the state it is already in.
         # That is not a transition, so it is not validated as one.
         if run.status is not status:
             self.state_service.transition(run, status)
+        # What the run has to say is written with the state it is said in and
+        # saved by the same repository call, so a run read back later shows its
+        # answer and not just its final status. Non-terminal transitions pass
+        # neither, which is correct: a run that is still moving has no outcome.
+        run.response = response
+        run.question = question
         self.agent_run_repository.save(run)

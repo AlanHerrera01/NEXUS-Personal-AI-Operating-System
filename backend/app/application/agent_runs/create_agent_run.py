@@ -13,7 +13,7 @@ class CreateAgentRunUseCase:
     agent_run_repository: AgentRunRepository
 
     def execute(
-        self, agent_id: EntityId, user_request: str, user_id: EntityId
+        self, agent_id: EntityId, user_request: str, user_id: EntityId, conversation_id: EntityId | None = None
     ) -> AgentRun:
         """Start a run of ``agent_id`` on behalf of ``user_id``.
 
@@ -32,6 +32,6 @@ class CreateAgentRunUseCase:
         if agent.status is not AgentStatus.ACTIVE:
             raise ValueError("inactive agents cannot start runs")
         agent_run = AgentRun(
-            agent_id=agent_id, user_request=user_request, user_id=user_id
+            agent_id=agent_id, user_request=user_request, user_id=user_id, conversation_id=conversation_id
         )
         return self.agent_run_repository.save(agent_run)

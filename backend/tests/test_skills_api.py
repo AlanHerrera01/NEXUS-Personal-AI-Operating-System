@@ -85,7 +85,8 @@ def test_tools_endpoint_exposes_metadata_without_secrets() -> None:
 
 
 def test_there_is_no_endpoint_to_execute_a_tool_directly() -> None:
-    paths = {route.path for route in app.routes}
+    # OpenAPI flattens included routers across supported FastAPI versions.
+    paths = set(app.openapi()["paths"])
 
     assert not any("execute" in path for path in paths)
     assert not any("{tool_name}" in path for path in paths)

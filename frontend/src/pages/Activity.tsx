@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { useAsyncData } from '../hooks/useAsyncData';
+import { useI18n } from '../hooks/useI18n';
+import type { MessageKey } from '../i18n/types';
 import { activityApi } from '../services/api/activityApi';
 import { permissionsApi } from '../services/api/permissionsApi';
 import { ApiError } from '../services/api/apiClient';
@@ -9,19 +11,34 @@ import type { ActivityCategoryCount, ActivityEvent, ActivityWindow } from '../ty
 /** How often the feed re-reads the backend while "live" is on. */
 const POLL_INTERVAL_MS = 15_000;
 
-const WINDOWS: { value: ActivityWindow; label: string }[] = [
-  { value: 'today', label: 'Hoy' },
-  { value: '24h', label: '24h' },
-  { value: '7d', label: '7d' },
-  { value: 'all', label: 'Todo' },
+/* Module constants carry keys rather than labels so the selector lists stay
+   static: they are translated where they render. */
+const WINDOWS: { value: ActivityWindow; labelKey: MessageKey }[] = [
+  { value: 'today', labelKey: 'pages.activity.windows.today' },
+  { value: '24h', labelKey: 'pages.activity.windows.last24h' },
+  { value: '7d', labelKey: 'pages.activity.windows.last7d' },
+  { value: 'all', labelKey: 'pages.activity.windows.allTime' },
 ];
 
-const STATUSES: { value: string; label: string }[] = [
-  { value: 'ALL', label: 'Todos los estados' },
-  { value: 'SUCCESS', label: 'Éxito (ALLOW / SUCCESS)' },
-  { value: 'PENDING', label: 'Pendiente (ASK / WAITING)' },
-  { value: 'DENIED', label: 'Bloqueado (DENY / HALT)' },
-  { value: 'ERROR', label: 'Errores' },
+const STATUSES: { value: string; labelKey: MessageKey }[] = [
+  { value: 'ALL', labelKey: 'pages.activity.statuses.all' },
+  { value: 'SUCCESS', labelKey: 'pages.activity.statuses.success' },
+  { value: 'PENDING', labelKey: 'pages.activity.statuses.pending' },
+  { value: 'DENIED', labelKey: 'pages.activity.statuses.denied' },
+  { value: 'ERROR', labelKey: 'pages.activity.statuses.errors' },
+];
+
+/** CSV column order; the headers are interface copy and resolve at export time. */
+const CSV_COLUMNS: MessageKey[] = [
+  'pages.activity.csv.timestamp',
+  'pages.activity.csv.category',
+  'pages.activity.csv.kind',
+  'pages.activity.csv.outcome',
+  'pages.activity.csv.title',
+  'pages.activity.csv.source',
+  'pages.activity.csv.reference',
+  'pages.activity.csv.agentRun',
+  'pages.activity.csv.detail',
 ];
 
 const CATEGORY_ICON: Record<string, string> = {
@@ -70,17 +87,6 @@ function riskClass(risk: string): string {
   return 'text-tertiary';
 }
 
-function formatTime(iso: string): string {
-  const date = new Date(iso);
-  return Number.isNaN(date.getTime()) ? '--:--:--' : date.toLocaleTimeString([], { hour12: false });
-}
-
-function formatStamp(iso: string): string {
-  const date = new Date(iso);
-  if (Number.isNaN(date.getTime())) return '--';
-  return `${date.toLocaleDateString()} ${date.toLocaleTimeString([], { hour12: false })}`;
-}
-
 /** A short, stable display id derived from the event's own key. */
 function shortRef(id: string): string {
   const tail = id.includes(':') ? id.slice(id.indexOf(':') + 1) : id;
@@ -103,18 +109,7 @@ function download(filename: string, content: string, mime: string): void {
   URL.revokeObjectURL(url);
 }
 
-function toCsv(events: ActivityEvent[]): string {
-  const header = [
-    'timestamp',
-    'category',
-    'kind',
-    'outcome',
-    'title',
-    'source',
-    'reference',
-    'agent_run_id',
-    'detail',
-  ];
+function toCsv(events: ActivityEvent[], header: string[]): string {
   const escape = (value: unknown) => `"${String(value ?? '').replace(/"/g, '""')}"`;
   const rows = events.map((event) =>
     [
@@ -134,11 +129,156 @@ function toCsv(events: ActivityEvent[]): string {
   return [header.join(','), ...rows].join('\n');
 }
 
+/** Categories that belong to an agent run and can be folded into one activity. */
+const RUN_CATEGORIES = new Set(['RUN', 'TOOL', 'TRUST']);
+
+const RISK_ORDER: Record<string, number> = { HIGH: 3, MEDIUM: 2, LOW: 1 };
+
+interface RunActivity {
+  key: string;
+  runId: string;
+  /** Ascending by time: the steps as the run executed them. */
+  events: ActivityEvent[];
+  latest: ActivityEvent;
+  startedAt: string;
+  endedAt: string;
+  request: string;
+  outcome: string;
+  risk: string | null;
+  toolCalls: number;
+  hasPending: boolean;
+}
+
+type TimelineEntry =
+  | { type: 'run'; activity: RunActivity }
+  | { type: 'event'; event: ActivityEvent };
+
+function eventTime(event: ActivityEvent): number {
+  const parsed = Date.parse(event.timestamp);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function maxRisk(events: ActivityEvent[]): string | null {
+  let highest: string | null = null;
+  for (const event of events) {
+    const risk = event.risk_level;
+    if (!risk) continue;
+    if (highest === null || (RISK_ORDER[risk] ?? 0) > (RISK_ORDER[highest] ?? 0)) {
+      highest = risk;
+    }
+  }
+  return highest;
+}
+
+/**
+ * The activity's own verdict. A failed or denied step outranks a later run
+ * completion, so a run that recovered is still shown as one that hit a brake.
+ */
+function groupOutcome(events: ActivityEvent[]): string {
+  if (events.some((event) => event.outcome === 'PENDING')) return 'PENDING';
+  if (events.some((event) => event.outcome === 'ERROR')) return 'ERROR';
+  if (events.some((event) => event.outcome === 'DENIED')) return 'DENIED';
+  const terminal = [...events]
+    .reverse()
+    .find((event) => event.category === 'RUN' && event.kind !== 'RUN_STARTED');
+  return terminal?.outcome ?? events[events.length - 1]?.outcome ?? 'INFO';
+}
+
+function formatDuration(startedAt: string, endedAt: string): string | null {
+  const ms = Date.parse(endedAt) - Date.parse(startedAt);
+  if (!Number.isFinite(ms) || ms <= 0) return null;
+  const seconds = Math.round(ms / 1000);
+  if (seconds < 60) return `${Math.max(1, seconds)}s`;
+  const minutes = Math.floor(seconds / 60);
+  const rest = seconds % 60;
+  if (minutes < 60) return rest > 0 ? `${minutes}m ${rest}s` : `${minutes}m`;
+  const hours = Math.floor(minutes / 60);
+  const remainder = minutes % 60;
+  return remainder > 0 ? `${hours}h ${remainder}m` : `${hours}h`;
+}
+
+/** The request that opened a run, read from every visible event, not just the filtered ones. */
+function requestsByRun(events: ActivityEvent[]): Map<string, string> {
+  const requests = new Map<string, string>();
+  for (const event of events) {
+    if (!event.agent_run_id || !event.detail) continue;
+    if (event.category === 'RUN' && event.kind === 'RUN_STARTED') {
+      requests.set(event.agent_run_id, event.detail);
+    } else if (!requests.has(event.agent_run_id)) {
+      requests.set(event.agent_run_id, event.detail);
+    }
+  }
+  return requests;
+}
+
+/**
+ * Folds a run's audit events into a single activity. Events that do not belong
+ * to a run (memory, system, a permission without a run) stay as standalone
+ * cards, because there is no activity to attach them to.
+ */
+function groupByRun(events: ActivityEvent[], requests: Map<string, string>): TimelineEntry[] {
+  const activities = new Map<string, RunActivity>();
+  const timeline: TimelineEntry[] = [];
+
+  for (const event of events) {
+    const runId = event.agent_run_id;
+    if (!runId || !RUN_CATEGORIES.has(event.category)) {
+      timeline.push({ type: 'event', event });
+      continue;
+    }
+
+    let activity = activities.get(runId);
+    if (!activity) {
+      activity = {
+        key: `run:${runId}`,
+        runId,
+        events: [],
+        latest: event,
+        startedAt: event.timestamp,
+        endedAt: event.timestamp,
+        request: requests.get(runId) ?? '',
+        outcome: event.outcome,
+        risk: event.risk_level,
+        toolCalls: 0,
+        hasPending: false,
+      };
+      activities.set(runId, activity);
+      timeline.push({ type: 'run', activity });
+    }
+    activity.events.push(event);
+  }
+
+  for (const activity of activities.values()) {
+    const ascending = [...activity.events].sort((left, right) => eventTime(left) - eventTime(right));
+    const latest = ascending[ascending.length - 1];
+    activity.events = ascending;
+    activity.latest = latest;
+    activity.startedAt = ascending[0].timestamp;
+    activity.endedAt = latest.timestamp;
+    activity.request =
+      activity.request ||
+      ascending.map((event) => event.detail).find((detail) => detail.trim() !== '') ||
+      '';
+    activity.outcome = groupOutcome(ascending);
+    activity.risk = maxRisk(ascending);
+    activity.toolCalls = ascending.filter((event) => event.category === 'TOOL').length;
+    activity.hasPending = ascending.some(
+      (event) =>
+        permissionIdOf(event.id) !== null &&
+        event.outcome === 'PENDING' &&
+        event.payload.resolvable === true,
+    );
+  }
+
+  return timeline;
+}
+
 function Sparkline({ values, peak }: { values: number[]; peak: number }) {
+  const { t } = useI18n();
   const width = 200;
   const height = 40;
   if (values.length === 0) {
-    return <div className="h-12 flex items-center justify-center font-label-mono-xs text-label-mono-xs text-outline">Sin eventos en la ventana</div>;
+    return <div className="h-12 flex items-center justify-center font-label-mono-xs text-label-mono-xs text-outline">{t('pages.activity.sparkline.empty')}</div>;
   }
   const max = Math.max(1, peak);
   const step = values.length > 1 ? width / (values.length - 1) : width;
@@ -163,6 +303,260 @@ function Sparkline({ values, peak }: { values: number[]; peak: number }) {
   );
 }
 
+interface DecisionControlsProps {
+  event: ActivityEvent;
+  busy: boolean;
+  onDecide: (event: ActivityEvent, allow: boolean) => void;
+}
+
+function DecisionControls({ event, busy, onDecide }: DecisionControlsProps) {
+  const { t } = useI18n();
+  return (
+    <div className="flex flex-wrap items-center justify-between gap-space-sm p-space-sm bg-surface-container rounded-lg">
+      <div className="flex items-center gap-2 text-on-surface font-label-mono-sm text-label-mono-sm">
+        <span className="material-symbols-outlined text-secondary text-[16px]">rule</span>
+        <span>{t('pages.activity.card.confirm')}</span>
+      </div>
+      <div className="flex items-center gap-space-xs">
+        <button
+          type="button"
+          disabled={busy}
+          onClick={() => onDecide(event, false)}
+          className="px-space-md py-1 bg-surface-container-high hover:bg-surface-bright disabled:opacity-50 text-on-surface rounded font-label-mono-xs text-label-mono-xs transition-colors"
+        >
+          {t('pages.activity.card.reject')}
+        </button>
+        <button
+          type="button"
+          disabled={busy}
+          onClick={() => onDecide(event, true)}
+          className="px-space-md py-1 bg-primary hover:bg-primary-container disabled:opacity-50 text-on-primary rounded font-label-mono-xs text-label-mono-xs font-semibold transition-all shadow-sm"
+        >
+          {busy ? t('pages.activity.card.resolving') : t('pages.activity.card.approve')}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+interface ActivityStepProps {
+  event: ActivityEvent;
+  busy: boolean;
+  outcome: string | null;
+  last: boolean;
+  onInspect: (event: ActivityEvent) => void;
+  onDecide: (event: ActivityEvent, allow: boolean) => void;
+}
+
+/** One tool/run step inside an expanded activity. */
+function ActivityStep({ event, busy, outcome, last, onInspect, onDecide }: ActivityStepProps) {
+  const { t, formatTime } = useI18n();
+  const style = outcomeStyle(event.outcome);
+  const icon = CATEGORY_ICON[event.category] ?? 'bolt';
+  const permissionId = permissionIdOf(event.id);
+  const resolvable =
+    permissionId !== null &&
+    event.outcome === 'PENDING' &&
+    event.payload.resolvable === true;
+
+  return (
+    <li className={`relative pl-6 ${last ? '' : 'pb-space-md'}`}>
+      {!last && (
+        <span
+          className="absolute left-[5px] top-4 bottom-0 w-px bg-outline-variant/40"
+          aria-hidden="true"
+        />
+      )}
+      <span
+        className={`absolute left-0 top-1.5 w-3 h-3 rounded-full ring-4 ring-surface-container-low ${style.dot}`}
+        aria-hidden="true"
+      />
+      <div className="flex flex-col gap-1 min-w-0">
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="text-outline font-label-mono-xs text-label-mono-xs">
+            {formatTime(event.timestamp, '--:--:--')}
+          </span>
+          <span className={`px-1.5 py-0.5 rounded font-label-mono-xs text-label-mono-xs font-semibold flex items-center gap-1.5 ${style.badge}`}>
+            <span className={`w-1.5 h-1.5 rounded-full ${style.dot}`} />
+            {event.outcome}
+          </span>
+          <span className="px-1.5 py-0.5 rounded bg-surface-container-high text-on-surface-variant font-label-mono-xs text-label-mono-xs">
+            {event.kind}
+          </span>
+          {event.risk_level && (
+            <span className={`px-1.5 py-0.5 rounded bg-surface-container-high font-label-mono-xs text-label-mono-xs ${riskClass(event.risk_level)}`}>
+              {t('pages.activity.card.risk', { level: event.risk_level })}
+            </span>
+          )}
+          <button
+            type="button"
+            onClick={() => onInspect(event)}
+            className="ml-auto px-2 py-0.5 rounded text-outline hover:text-on-surface hover:bg-surface-container-high font-label-mono-xs text-label-mono-xs flex items-center gap-1 transition-colors"
+          >
+            <span>{t('pages.activity.card.auditPayload')}</span>
+            <span className="material-symbols-outlined text-[12px]">arrow_outward</span>
+          </button>
+        </div>
+
+        <div className="flex items-center gap-2">
+          <span className={`material-symbols-outlined text-[16px] ${style.text}`}>{icon}</span>
+          <h4 className="font-body-sm text-body-sm text-on-surface">{event.title}</h4>
+        </div>
+
+        {(event.detail || event.source || event.reference) && (
+          <div className="flex flex-wrap items-center gap-2 font-body-sm text-body-sm text-on-surface-variant">
+            {event.source && (
+              <code className="px-1.5 py-0.5 rounded bg-surface-container-highest font-code-base text-code-base text-secondary">
+                {event.source}
+              </code>
+            )}
+            {event.reference && (
+              <code className="px-1.5 py-0.5 rounded bg-surface-container-highest font-code-base text-code-base text-on-surface">
+                {event.reference}
+              </code>
+            )}
+            {event.detail && <span className="leading-relaxed">{event.detail}</span>}
+          </div>
+        )}
+
+        {resolvable && <DecisionControls event={event} busy={busy} onDecide={onDecide} />}
+
+        {outcome && (
+          <div className="p-space-xs px-space-sm rounded bg-surface-container font-code-base text-label-mono-sm text-on-surface-variant">
+            {outcome}
+          </div>
+        )}
+      </div>
+    </li>
+  );
+}
+
+interface ActivityGroupCardProps {
+  activity: RunActivity;
+  busyId: string | null;
+  outcomes: Record<string, string>;
+  onInspect: (event: ActivityEvent) => void;
+  onDecide: (event: ActivityEvent, allow: boolean) => void;
+}
+
+/**
+ * A run folded into one row. The header answers "what happened" at a glance;
+ * the steps are the same audit events that used to be one card each, now kept
+ * behind an explicit expansion so a long trace stays readable.
+ */
+function ActivityGroupCard({ activity, busyId, outcomes, onInspect, onDecide }: ActivityGroupCardProps) {
+  const { t, formatTime } = useI18n();
+  const [open, setOpen] = useState(false);
+  // A pending approval must never be hidden behind a collapsed row.
+  const expanded = open || activity.hasPending;
+
+  const style = outcomeStyle(activity.outcome);
+  const duration = formatDuration(activity.startedAt, activity.endedAt);
+  const eventCount =
+    activity.events.length === 1
+      ? t('pages.activity.group.eventsOne')
+      : t('pages.activity.group.eventsOther', { count: activity.events.length });
+  const toolCount =
+    activity.toolCalls === 1
+      ? t('pages.activity.group.toolsOne')
+      : t('pages.activity.group.toolsOther', { count: activity.toolCalls });
+  const request = activity.request.trim() || t('pages.activity.group.fallbackTitle');
+
+  return (
+    <section className="rounded-xl bg-surface-container-low hover:bg-surface-container shadow-sm transition-colors overflow-hidden">
+      <button
+        type="button"
+        onClick={() => {
+          if (!activity.hasPending) setOpen((value) => !value);
+        }}
+        aria-expanded={expanded}
+        className="w-full text-left p-space-md flex items-start justify-between gap-space-md"
+      >
+        <div className="flex items-start gap-space-sm min-w-0">
+          <span className={`w-9 h-9 rounded-lg flex items-center justify-center shrink-0 bg-surface-container-high ${style.text}`}>
+            <span className="material-symbols-outlined text-[18px]">account_tree</span>
+          </span>
+          <div className="flex flex-col gap-1 min-w-0">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className={`px-2 py-0.5 rounded font-label-mono-xs text-label-mono-xs font-semibold flex items-center gap-1.5 ${style.badge}`}>
+                <span className={`w-1.5 h-1.5 rounded-full ${style.dot}`} />
+                {activity.outcome}
+              </span>
+              <span className="font-label-mono-sm text-label-mono-sm text-on-surface font-medium">
+                {shortRef(`run:${activity.runId}`)}
+              </span>
+              <span className="text-outline font-label-mono-xs text-label-mono-xs">
+                {formatTime(activity.startedAt, '--:--:--')}
+              </span>
+              <span className="px-1.5 py-0.5 rounded bg-surface-container-high text-on-surface-variant font-label-mono-xs text-label-mono-xs">
+                {t('pages.activity.group.badge')}
+              </span>
+              <span className="px-1.5 py-0.5 rounded bg-surface-container-high text-on-surface-variant font-label-mono-xs text-label-mono-xs">
+                {activity.latest.kind}
+              </span>
+              {activity.risk && (
+                <span className={`px-1.5 py-0.5 rounded bg-surface-container-high font-label-mono-xs text-label-mono-xs ${riskClass(activity.risk)}`}>
+                  {t('pages.activity.card.risk', { level: activity.risk })}
+                </span>
+              )}
+            </div>
+            <h3 className="font-headline-sm text-headline-sm text-on-surface line-clamp-2 break-words">
+              {request}
+            </h3>
+            <div className="flex flex-wrap items-center gap-2 font-label-mono-xs text-label-mono-xs text-on-surface-variant">
+              <span>{eventCount}</span>
+              <span className="text-outline">·</span>
+              <span>{toolCount}</span>
+              {duration && (
+                <>
+                  <span className="text-outline">·</span>
+                  <span>{t('pages.activity.group.duration', { duration })}</span>
+                </>
+              )}
+            </div>
+          </div>
+        </div>
+
+        <div className="flex items-center gap-2 shrink-0 pt-1">
+          {activity.hasPending ? (
+            <span className="px-2 py-0.5 rounded bg-secondary-container/20 text-secondary font-label-mono-xs text-label-mono-xs font-semibold">
+              {t('pages.activity.group.needsApproval')}
+            </span>
+          ) : (
+            <>
+              <span className="font-label-mono-xs text-label-mono-xs text-outline whitespace-nowrap">
+                {expanded ? t('pages.activity.group.collapse') : t('pages.activity.group.expand')}
+              </span>
+              <span className="material-symbols-outlined text-[18px] text-outline">
+                {expanded ? 'expand_less' : 'expand_more'}
+              </span>
+            </>
+          )}
+        </div>
+      </button>
+
+      {expanded && (
+        <div className="border-t border-outline-variant/30 px-space-md pt-space-md pb-space-md bg-surface-container-low/40">
+          <ol className="flex flex-col">
+            {activity.events.map((event, index) => (
+              <ActivityStep
+                key={event.id}
+                event={event}
+                busy={busyId === event.id}
+                outcome={outcomes[event.id] ?? null}
+                last={index === activity.events.length - 1}
+                onInspect={onInspect}
+                onDecide={onDecide}
+              />
+            ))}
+          </ol>
+        </div>
+      )}
+    </section>
+  );
+}
+
+
 interface TimelineCardProps {
   event: ActivityEvent;
   busy: boolean;
@@ -172,6 +566,7 @@ interface TimelineCardProps {
 }
 
 function TimelineCard({ event, busy, outcome, onInspect, onDecide }: TimelineCardProps) {
+  const { t, formatTime } = useI18n();
   const style = outcomeStyle(event.outcome);
   const icon = CATEGORY_ICON[event.category] ?? 'bolt';
   const permissionId = permissionIdOf(event.id);
@@ -189,13 +584,13 @@ function TimelineCard({ event, busy, outcome, onInspect, onDecide }: TimelineCar
             {event.outcome}
           </span>
           <span className="font-label-mono-sm text-label-mono-sm text-on-surface font-medium">{shortRef(event.id)}</span>
-          <span className="text-outline font-label-mono-xs text-label-mono-xs">{formatTime(event.timestamp)}</span>
+          <span className="text-outline font-label-mono-xs text-label-mono-xs">{formatTime(event.timestamp, '--:--:--')}</span>
           <span className="px-1.5 py-0.5 rounded bg-surface-container-high text-on-surface-variant font-label-mono-xs text-label-mono-xs">
             {event.kind}
           </span>
           {event.risk_level && (
             <span className={`px-1.5 py-0.5 rounded bg-surface-container-high font-label-mono-xs text-label-mono-xs ${riskClass(event.risk_level)}`}>
-              RIESGO {event.risk_level}
+              {t('pages.activity.card.risk', { level: event.risk_level })}
             </span>
           )}
         </div>
@@ -204,7 +599,7 @@ function TimelineCard({ event, busy, outcome, onInspect, onDecide }: TimelineCar
           onClick={() => onInspect(event)}
           className="opacity-0 group-hover:opacity-100 focus:opacity-100 transition-opacity px-2 py-1 rounded bg-surface-bright text-on-surface font-label-mono-xs text-label-mono-xs flex items-center gap-1 shrink-0"
         >
-          <span>AUDIT PAYLOAD</span>
+          <span>{t('pages.activity.card.auditPayload')}</span>
           <span className="material-symbols-outlined text-[13px]">arrow_outward</span>
         </button>
       </div>
@@ -230,32 +625,7 @@ function TimelineCard({ event, busy, outcome, onInspect, onDecide }: TimelineCar
         </div>
       )}
 
-      {resolvable && (
-        <div className="flex flex-wrap items-center justify-between gap-space-sm p-space-sm bg-surface-container rounded-lg">
-          <div className="flex items-center gap-2 text-on-surface font-label-mono-sm text-label-mono-sm">
-            <span className="material-symbols-outlined text-secondary text-[16px]">rule</span>
-            <span>Requiere confirmación explícita del operador</span>
-          </div>
-          <div className="flex items-center gap-space-xs">
-            <button
-              type="button"
-              disabled={busy}
-              onClick={() => onDecide(event, false)}
-              className="px-space-md py-1 bg-surface-container-high hover:bg-surface-bright disabled:opacity-50 text-on-surface rounded font-label-mono-xs text-label-mono-xs transition-colors"
-            >
-              Rechazar
-            </button>
-            <button
-              type="button"
-              disabled={busy}
-              onClick={() => onDecide(event, true)}
-              className="px-space-md py-1 bg-primary hover:bg-primary-container disabled:opacity-50 text-on-primary rounded font-label-mono-xs text-label-mono-xs font-semibold transition-all shadow-sm"
-            >
-              {busy ? 'Resolviendo…' : 'Aprobar acción'}
-            </button>
-          </div>
-        </div>
-      )}
+      {resolvable && <DecisionControls event={event} busy={busy} onDecide={onDecide} />}
 
       {outcome && (
         <div className="p-space-xs px-space-sm rounded bg-surface-container font-code-base text-label-mono-sm text-on-surface-variant">
@@ -287,6 +657,7 @@ function MetricTile({
 }
 
 export default function Activity() {
+  const { t, formatDateTime } = useI18n();
   const [range, setRange] = useState<ActivityWindow>('24h');
   const [live, setLive] = useState(true);
   const [query, setQuery] = useState('');
@@ -311,6 +682,7 @@ export default function Activity() {
   }, [live, reload]);
 
   const events = useMemo(() => data?.events ?? [], [data]);
+  const runRequests = useMemo(() => requestsByRun(events), [events]);
 
   const filtered = useMemo(() => {
     const needle = query.trim().toLowerCase();
@@ -331,11 +703,15 @@ export default function Activity() {
     });
   }, [events, category, status, query]);
 
+  // Runs collapse into one card each; everything else keeps its own card.
+  const timeline = useMemo(() => groupByRun(filtered, runRequests), [filtered, runRequests]);
+  const activityCount = timeline.filter((entry) => entry.type === 'run').length;
+
   const summary = data?.summary;
   const audit = data?.audit;
   const categories: ActivityCategoryCount[] = summary?.categories ?? [];
   const successRate =
-    summary && summary.success_rate !== null ? `${(summary.success_rate * 100).toFixed(1)}%` : 'NO EXPUESTO';
+    summary && summary.success_rate !== null ? `${(summary.success_rate * 100).toFixed(1)}%` : t('common.notExposed');
 
   const decide = async (event: ActivityEvent, allow: boolean) => {
     const permissionId = permissionIdOf(event.id);
@@ -348,12 +724,12 @@ export default function Activity() {
       setOutcomes((prev) => ({
         ...prev,
         [event.id]: allow
-          ? 'Acción autorizada. El run se reanuda y vuelve a pasar por el Trust Engine.'
-          : 'Solicitud denegada. El run observa el rechazo y puede continuar.',
+          ? t('pages.activity.decision.approved')
+          : t('pages.activity.decision.rejected'),
       }));
       reload();
     } catch (caught) {
-      setDecisionError(caught instanceof ApiError ? caught.message : 'La decisión ha fallado.');
+      setDecisionError(caught instanceof ApiError ? caught.message : t('pages.activity.decision.failed'));
     } finally {
       setBusy(null);
     }
@@ -361,7 +737,8 @@ export default function Activity() {
 
   const exportJson = () =>
     download('activity.json', JSON.stringify(filtered, null, 2), 'application/json');
-  const exportCsv = () => download('activity.csv', toCsv(filtered), 'text/csv');
+  const exportCsv = () =>
+    download('activity.csv', toCsv(filtered, CSV_COLUMNS.map((key) => t(key))), 'text/csv');
 
   return (
     <div className="flex flex-col w-full">
@@ -373,7 +750,7 @@ export default function Activity() {
             <div className="flex flex-col gap-space-xs max-w-3xl">
               <div className="flex flex-wrap items-center gap-space-sm">
                 <span className="px-2 py-0.5 rounded bg-surface-container-high font-label-mono-xs text-label-mono-xs text-secondary tracking-widest uppercase">
-                  AUDIT &amp; RUNTIME TELEMETRY
+                  {t('pages.activity.header.eyebrow')}
                 </span>
                 <span className="text-outline font-label-mono-xs text-label-mono-xs">/</span>
                 <span className="font-label-mono-xs text-label-mono-xs text-outline tracking-wider">
@@ -381,12 +758,10 @@ export default function Activity() {
                 </span>
               </div>
               <h1 className="font-headline-xl text-headline-xl text-on-surface tracking-tight font-semibold mt-1">
-                Registro de Actividad y Auditoría
+                {t('pages.activity.header.title')}
               </h1>
               <p className="font-body-md text-body-md text-on-surface-variant">
-                Trazabilidad de decisiones del Trust Engine, aprobaciones, runs, invocaciones de
-                herramientas y memoria — fusionadas desde las fuentes reales del backend y acotadas a
-                tu usuario.
+                {t('pages.activity.header.description')}
               </p>
             </div>
 
@@ -394,7 +769,7 @@ export default function Activity() {
               <button
                 type="button"
                 onClick={() => setLive((value) => !value)}
-                title="Alterna el refresco periódico de la traza"
+                title={t('pages.activity.header.liveToggleTitle')}
                 className="flex items-center gap-2 px-space-md py-1.5 rounded-lg bg-surface-container-high text-on-surface text-label-mono-sm font-label-mono-sm hover:bg-surface-bright transition-all shadow-sm"
               >
                 <span className="relative flex h-2 w-2">
@@ -402,7 +777,7 @@ export default function Activity() {
                   <span className={`relative inline-flex rounded-full h-2 w-2 ${live ? 'bg-tertiary' : 'bg-outline'}`} />
                 </span>
                 <span className={live ? 'text-tertiary font-semibold tracking-wide' : 'text-outline tracking-wide'}>
-                  {live ? 'EN VIVO' : 'PAUSADO'}
+                  {live ? t('pages.activity.header.live') : t('pages.activity.header.paused')}
                 </span>
               </button>
               <div className="flex items-center rounded-lg bg-surface-container p-0.5">
@@ -412,7 +787,7 @@ export default function Activity() {
                   className="px-space-md py-1.5 rounded font-label-mono-sm text-label-mono-sm text-on-surface hover:bg-surface-container-high transition-colors flex items-center gap-1.5"
                 >
                   <span className="material-symbols-outlined text-[15px]">file_download</span>
-                  <span>Exportar</span>
+                  <span>{t('pages.activity.header.exportLabel')}</span>
                 </button>
                 <span className="text-outline-variant font-label-mono-xs text-label-mono-xs px-1">|</span>
                 <button type="button" onClick={exportJson} className="px-2 py-1.5 rounded font-label-mono-xs text-label-mono-xs text-on-surface-variant hover:bg-surface-container-high uppercase">
@@ -431,8 +806,7 @@ export default function Activity() {
           <div className="rounded-xl bg-error-container/20 border border-error/30 p-space-md flex items-center gap-space-sm">
             <span className="material-symbols-outlined text-error text-[18px]">database_off</span>
             <span className="font-body-sm text-body-sm text-on-surface">
-              Almacenamiento no disponible: los runs, acciones, aprobaciones y memorias no se pudieron
-              leer. Solo se muestra la traza de autorización en memoria.
+              {t('pages.activity.storage.unavailable')}
             </span>
           </div>
         )}
@@ -449,7 +823,7 @@ export default function Activity() {
               <input
                 value={query}
                 onChange={(event) => setQuery(event.target.value)}
-                placeholder="Filtrar eventos por texto, herramienta, skill o run…"
+                placeholder={t('pages.activity.search.placeholder')}
                 className="w-full pl-10 pr-4 py-2 bg-surface-container-lowest rounded-lg font-code-base text-code-base text-on-surface placeholder-outline focus:outline-none focus:ring-1 focus:ring-primary transition-all"
               />
             </div>
@@ -467,7 +841,7 @@ export default function Activity() {
                         : 'text-on-surface-variant hover:text-on-surface'
                     }`}
                   >
-                    {option.label}
+                    {t(option.labelKey)}
                   </button>
                 ))}
               </div>
@@ -480,7 +854,7 @@ export default function Activity() {
                 >
                   {STATUSES.map((option) => (
                     <option key={option.value} value={option.value}>
-                      {option.label}
+                      {t(option.labelKey)}
                     </option>
                   ))}
                 </select>
@@ -491,7 +865,7 @@ export default function Activity() {
 
               <button
                 type="button"
-                title="Limpiar filtros"
+                title={t('pages.activity.search.clear')}
                 onClick={() => {
                   setQuery('');
                   setCategory('ALL');
@@ -514,7 +888,7 @@ export default function Activity() {
               }`}
             >
               <span className="w-1.5 h-1.5 rounded-full bg-secondary" />
-              <span>Todos</span>
+              <span>{t('common.all')}</span>
               <span className="font-label-mono-xs text-label-mono-xs px-1.5 py-0.5 rounded bg-surface-container-highest text-on-surface-variant">
                 {summary?.total ?? 0}
               </span>
@@ -547,7 +921,7 @@ export default function Activity() {
               }`}
             >
               <span className="w-1.5 h-1.5 rounded-full bg-error" />
-              <span>Errores &amp; Denegaciones</span>
+              <span>{t('pages.activity.categories.errorsAndDenials')}</span>
               <span className="font-label-mono-xs text-label-mono-xs px-1.5 py-0.5 rounded bg-surface-container text-error">
                 {(summary?.denied ?? 0) + (summary?.error ?? 0)}
               </span>
@@ -562,41 +936,62 @@ export default function Activity() {
             <div className="flex items-center justify-between px-space-xs mb-1 gap-space-sm">
               <div className="flex items-center gap-space-sm">
                 <span className="font-label-mono-sm text-label-mono-sm uppercase text-outline">
-                  SECUENCIA DE AUDITORÍA
+                  {t('pages.activity.timeline.heading')}
                 </span>
                 <span className="w-1 h-1 rounded-full bg-outline" />
                 <span className="font-label-mono-xs text-label-mono-xs text-on-surface-variant">
-                  {range.toUpperCase()} · {filtered.length} EVENTOS
+                  {t('pages.activity.timeline.windowEvents', { window: range.toUpperCase(), count: filtered.length })}
                 </span>
+                {activityCount > 0 && (
+                  <>
+                    <span className="w-1 h-1 rounded-full bg-outline" />
+                    <span className="font-label-mono-xs text-label-mono-xs text-secondary">
+                      {activityCount === 1
+                        ? t('pages.activity.timeline.windowActivityOne')
+                        : t('pages.activity.timeline.windowActivities', { count: activityCount })}
+                    </span>
+                  </>
+                )}
               </div>
               <span className="font-label-mono-xs text-label-mono-xs text-outline">
-                {live ? 'Sondeo automático cada 15 s' : 'Refresco manual'}
+                {live ? t('pages.activity.timeline.autoPoll') : t('pages.activity.timeline.manualRefresh')}
               </span>
             </div>
 
             {loading && !data ? (
-              <LoadingRow label="Cargando traza de actividad…" />
+              <LoadingRow label={t('pages.activity.timeline.loading')} />
             ) : error && !data ? (
               <ErrorRow message={error} onRetry={reload} />
             ) : filtered.length === 0 ? (
-              <EmptyRow message="No hay actividad que coincida con los filtros en esta ventana." />
+              <EmptyRow message={t('pages.activity.timeline.empty')} />
             ) : (
-              filtered.map((event) => (
-                <TimelineCard
-                  key={event.id}
-                  event={event}
-                  busy={busy === event.id}
-                  outcome={outcomes[event.id] ?? null}
-                  onInspect={setInspect}
-                  onDecide={decide}
-                />
-              ))
+              timeline.map((entry) =>
+                entry.type === 'run' ? (
+                  <ActivityGroupCard
+                    key={entry.activity.key}
+                    activity={entry.activity}
+                    busyId={busy}
+                    outcomes={outcomes}
+                    onInspect={setInspect}
+                    onDecide={decide}
+                  />
+                ) : (
+                  <TimelineCard
+                    key={entry.event.id}
+                    event={entry.event}
+                    busy={busy === entry.event.id}
+                    outcome={outcomes[entry.event.id] ?? null}
+                    onInspect={setInspect}
+                    onDecide={decide}
+                  />
+                ),
+              )
             )}
 
             <div className="flex items-center justify-between py-space-md px-space-xs text-outline font-label-mono-xs text-label-mono-xs">
               <span>
-                Mostrando {filtered.length} de {summary?.total ?? 0} eventos
-                {data?.truncated ? ' (ventana truncada)' : ''}
+                {t('pages.activity.timeline.showing', { visible: filtered.length, total: summary?.total ?? 0 })}
+                {data?.truncated ? t('pages.activity.timeline.truncated') : ''}
               </span>
               <button
                 type="button"
@@ -604,7 +999,7 @@ export default function Activity() {
                 className="px-space-md py-1.5 rounded-lg bg-surface-container hover:bg-surface-container-high text-on-surface transition-colors flex items-center gap-1"
               >
                 <span className="material-symbols-outlined text-[14px]">refresh</span>
-                <span>Recargar</span>
+                <span>{t('common.reload')}</span>
               </button>
             </div>
           </div>
@@ -615,7 +1010,7 @@ export default function Activity() {
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2">
                   <span className="material-symbols-outlined text-secondary text-[20px]">analytics</span>
-                  <h2 className="font-headline-sm text-headline-sm text-on-surface">Métricas de Actividad</h2>
+                  <h2 className="font-headline-sm text-headline-sm text-on-surface">{t('pages.activity.cockpit.metrics')}</h2>
                 </div>
                 <span className="font-label-mono-xs text-label-mono-xs px-2 py-0.5 rounded bg-surface-container-high text-on-surface-variant uppercase">
                   {range}
@@ -624,31 +1019,31 @@ export default function Activity() {
 
               <div className="grid grid-cols-2 gap-space-md">
                 <MetricTile
-                  label="Total Eventos"
+                  label={t('pages.activity.cockpit.total')}
                   value={summary?.total ?? 0}
-                  hint={`${summary?.resolved ?? 0} con veredicto`}
+                  hint={t('pages.activity.cockpit.totalHint', { count: summary?.resolved ?? 0 })}
                   tone="text-on-surface"
                 />
                 <MetricTile
-                  label="Tasa de Éxito"
+                  label={t('pages.activity.cockpit.successRate')}
                   value={successRate}
                   hint={
                     summary && summary.success_rate !== null
-                      ? `${summary.success} de ${summary.resolved} resueltos`
-                      : 'Sin eventos resueltos'
+                      ? t('pages.activity.cockpit.successHint', { success: summary.success, total: summary.resolved })
+                      : t('pages.activity.cockpit.noResolved')
                   }
                   tone="text-tertiary"
                 />
                 <MetricTile
-                  label="Frenos de Seguridad"
+                  label={t('pages.activity.cockpit.brakes')}
                   value={summary?.denied ?? 0}
-                  hint="Trust Engine DENY / BLOCK"
+                  hint={t('pages.activity.cockpit.brakesHint')}
                   tone="text-error"
                 />
                 <MetricTile
-                  label="Pendientes"
+                  label={t('pages.activity.cockpit.pending')}
                   value={summary?.pending ?? 0}
-                  hint="esperando decisión"
+                  hint={t('pages.activity.cockpit.pendingHint')}
                   tone="text-secondary"
                 />
               </div>
@@ -656,9 +1051,14 @@ export default function Activity() {
               <div className="flex flex-col gap-space-xs">
                 <div className="flex items-center justify-between text-outline font-label-mono-xs text-label-mono-xs">
                   <span>
-                    DENSIDAD {summary && summary.bucket_seconds >= 86400 ? 'DIARIA' : 'HORARIA'}
+                    {t('pages.activity.cockpit.density', {
+                      bucket:
+                        summary && summary.bucket_seconds >= 86400
+                          ? t('pages.activity.cockpit.densityDaily')
+                          : t('pages.activity.cockpit.densityHourly'),
+                    })}
                   </span>
-                  <span>PEAK: {summary?.density_peak ?? 0} ev</span>
+                  <span>{t('pages.activity.cockpit.peak', { value: summary?.density_peak ?? 0 })}</span>
                 </div>
                 <div className="w-full rounded bg-surface-container-lowest p-2">
                   <Sparkline values={summary?.density ?? []} peak={summary?.density_peak ?? 0} />
@@ -666,8 +1066,7 @@ export default function Activity() {
               </div>
 
               <p className="font-label-mono-xs text-label-mono-xs text-outline leading-5">
-                Latencia, tokens y tamaño de payload: <span className="text-on-surface-variant">NO EXPUESTO</span>. El
-                backend no registra telemetría de ejecución por acción.
+                {t('pages.activity.cockpit.telemetryNote')}<span className="text-on-surface-variant">{t('common.notExposed')}</span>{t('pages.activity.cockpit.telemetryNoteAfter')}
               </p>
             </div>
 
@@ -675,9 +1074,9 @@ export default function Activity() {
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2">
                   <span className="material-symbols-outlined text-primary text-[20px]">pie_chart</span>
-                  <h2 className="font-headline-sm text-headline-sm text-on-surface">Distribución de Eventos</h2>
+                  <h2 className="font-headline-sm text-headline-sm text-on-surface">{t('pages.activity.cockpit.distribution')}</h2>
                 </div>
-                <span className="font-label-mono-xs text-label-mono-xs text-outline">POR CATEGORÍA</span>
+                <span className="font-label-mono-xs text-label-mono-xs text-outline">{t('pages.activity.cockpit.byCategory')}</span>
               </div>
 
               <div className="w-full h-3 rounded-full bg-surface-container overflow-hidden flex">
@@ -707,7 +1106,7 @@ export default function Activity() {
                         <span className="text-on-surface">{item.label}</span>
                       </div>
                       <div className="flex items-center gap-2 font-label-mono-xs text-label-mono-xs">
-                        <span className="text-outline">{item.count} ev</span>
+                        <span className="text-outline">{t('pages.activity.cockpit.eventCount', { count: item.count })}</span>
                         <span className="text-on-surface font-semibold">{pct}%</span>
                       </div>
                     </div>
@@ -720,27 +1119,26 @@ export default function Activity() {
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2">
                   <span className="material-symbols-outlined text-outline text-[20px]">database</span>
-                  <h2 className="font-headline-sm text-headline-sm text-on-surface">Retención &amp; Archivo</h2>
+                  <h2 className="font-headline-sm text-headline-sm text-on-surface">{t('pages.activity.cockpit.retention')}</h2>
                 </div>
                 <span className="px-2 py-0.5 rounded bg-surface-container font-label-mono-xs text-label-mono-xs text-secondary">
-                  EN MEMORIA
+                  {t('pages.activity.cockpit.inMemory')}
                 </span>
               </div>
 
               <p className="font-body-sm text-body-sm text-on-surface-variant">
-                {audit?.note ??
-                  'La traza de autorización vive en memoria del proceso: acotada y no persistente.'}
+                {audit?.note ?? t('pages.activity.cockpit.auditNote')}
               </p>
 
               <div className="grid grid-cols-2 gap-space-sm">
                 <div className="p-space-sm rounded bg-surface-container flex flex-col">
-                  <span className="font-label-mono-xs text-label-mono-xs text-outline uppercase">Entradas retenidas</span>
+                  <span className="font-label-mono-xs text-label-mono-xs text-outline uppercase">{t('pages.activity.cockpit.retainedEntries')}</span>
                   <span className="font-headline-sm text-headline-sm text-on-surface font-semibold">
                     {audit?.retained_entries ?? 0}
                   </span>
                 </div>
                 <div className="p-space-sm rounded bg-surface-container flex flex-col">
-                  <span className="font-label-mono-xs text-label-mono-xs text-outline uppercase">Capacidad del anillo</span>
+                  <span className="font-label-mono-xs text-label-mono-xs text-outline uppercase">{t('pages.activity.cockpit.ringCapacity')}</span>
                   <span className="font-headline-sm text-headline-sm text-on-surface font-semibold">
                     {audit?.retention_capacity ?? 0}
                   </span>
@@ -749,9 +1147,9 @@ export default function Activity() {
 
               <div className="p-space-sm rounded bg-surface-container flex items-center justify-between font-label-mono-xs text-label-mono-xs text-outline">
                 <span>
-                  Política de retención configurable: <strong className="text-on-surface-variant">NO EXPUESTO</strong>
+                  {t('pages.activity.cockpit.retentionPolicy')}<strong className="text-on-surface-variant">{t('common.notExposed')}</strong>
                 </span>
-                <span className="text-outline">Purga: no disponible</span>
+                <span className="text-outline">{t('pages.activity.cockpit.purgeUnavailable')}</span>
               </div>
             </div>
 
@@ -759,11 +1157,11 @@ export default function Activity() {
               <div className="flex items-center gap-2">
                 <span className={`w-2 h-2 rounded-full ${data?.storage_available ? 'bg-tertiary' : 'bg-error'}`} />
                 <span className="text-on-surface-variant">
-                  AUDIT_WRITER_THREAD / IOPS / PID: NO EXPUESTO
+                  {t('pages.activity.cockpit.internalMetrics')}{t('common.notExposed')}
                 </span>
               </div>
               <span className="text-outline">
-                {data ? `SYNC ${formatStamp(data.generated_at)}` : 'SIN SYNC'}
+                {data ? t('pages.activity.cockpit.sync', { time: formatDateTime(data.generated_at, '--') }) : t('pages.activity.cockpit.noSync')}
               </span>
             </div>
           </div>
@@ -787,7 +1185,7 @@ export default function Activity() {
               <div className="flex items-center gap-2 font-label-mono-sm text-label-mono-sm">
                 <span className="material-symbols-outlined text-secondary text-[20px]">terminal</span>
                 <span className="text-on-surface font-semibold">
-                  Trazabilidad: <span className="text-primary">{shortRef(inspect.id)}</span>
+                  {t('pages.activity.inspector.title')} <span className="text-primary">{shortRef(inspect.id)}</span>
                 </span>
               </div>
               <button
@@ -803,7 +1201,7 @@ export default function Activity() {
               <span className="px-2 py-0.5 rounded bg-surface-container-high text-on-surface-variant">{inspect.category}</span>
               <span className="px-2 py-0.5 rounded bg-surface-container-high text-on-surface-variant">{inspect.kind}</span>
               <span className={`px-2 py-0.5 rounded ${outcomeStyle(inspect.outcome).badge}`}>{inspect.outcome}</span>
-              <span className="text-outline">{formatStamp(inspect.timestamp)}</span>
+              <span className="text-outline">{formatDateTime(inspect.timestamp, '--')}</span>
             </div>
 
             <div className="rounded-lg bg-surface-container-lowest p-space-md font-code-base text-code-base text-on-surface max-h-96 overflow-y-auto">
@@ -818,7 +1216,7 @@ export default function Activity() {
                 onClick={() => setInspect(null)}
                 className="px-space-md py-1.5 rounded bg-surface-container-high hover:bg-surface-bright text-on-surface font-label-mono-sm text-label-mono-sm"
               >
-                Cerrar
+                {t('common.close')}
               </button>
             </div>
           </div>

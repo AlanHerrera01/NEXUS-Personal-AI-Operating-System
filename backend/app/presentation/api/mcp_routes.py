@@ -1,25 +1,20 @@
-"""MCP server registration.
+"""MCP server registration and connection testing.
 
-The panel can record which MCP servers exist, where they live and how to reach
-them. It cannot make NEXUS connect to them: this route only ever writes
-configuration. That separation is what makes exposing it defensible -- an
-endpoint that connected on demand would be a remote code execution primitive
-wearing a settings dialog's clothes.
-
-The honest gap, stated rather than implied: nothing in the tool pipeline
-consumes this registry yet. ``MCPClientAdapter`` and ``MCPToolMapper`` exist,
-but the orchestrator does not load registered servers, so a row here changes no
-agent behaviour today.
+The panel records which MCP servers exist and, on an explicit test, opens one
+connection to list their tools. Registration itself still writes configuration
+only; the test and an agent run are the two places a connection is opened.
 
 What is enforced here:
 
-* a caller only sees, changes or deletes its own servers, and an unowned id
-  answers 404 rather than 403 so the route is not an existence oracle;
+* a caller only sees, changes, tests or deletes its own servers, and an unowned
+  id answers 404 rather than 403 so the route is not an existence oracle;
 * ``trust_level`` is never read from the request. A form that could label a
   server "trusted" would let the caller grant itself the trust the engine is
   supposed to decide;
 * the transport-specific shape is checked against what the adapter actually
-  reads, so a stored row is one the adapter can act on.
+  reads, so a stored row is one the adapter can act on;
+* discovered tools are not executed by this route. They are returned for the
+  panel, and any later call goes through the Trust Engine with confirmation.
 """
 
 from __future__ import annotations
@@ -31,15 +26,20 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.exc import IntegrityError
 
 from app.application.mcp.mcp_server_registry import MCPServerRegistry
+from app.application.mcp.mcp_tool_provider import MCPToolProvider
 from app.domain.entities.mcp_server import MCPServer
 from app.domain.value_objects.entity_id import EntityId
 from app.domain.value_objects.mcp_transport_type import MCPTransportType
 from app.presentation.dependencies.identity import current_user_id
-from app.presentation.dependencies.mcp import mcp_registry_dependency
+from app.presentation.dependencies.mcp import (
+    mcp_registry_dependency,
+    mcp_tool_provider_dependency,
+)
 from app.presentation.schemas.mcp import (
     ADAPTER_TRANSPORTS,
     MAX_CONFIGURATION_BYTES,
     REGISTRABLE_TRANSPORTS,
+    MCPConnectionTestResponse,
     MCPServerCreateRequest,
     MCPServerUpdateRequest,
     MCPServerView,
@@ -203,6 +203,24 @@ def update_mcp_server(
             server.disable()
 
     return _to_view(registry.save_server(server))
+
+
+@router.post("/{server_id}/test", response_model=MCPConnectionTestResponse)
+async def test_mcp_server(
+    server_id: UUID,
+    registry: MCPServerRegistry = Depends(mcp_registry_dependency),
+    provider: MCPToolProvider = Depends(mcp_tool_provider_dependency),
+    user_id: EntityId = Depends(current_user_id),
+) -> MCPConnectionTestResponse:
+    """Open a real connection and report the tools the server exposes.
+
+    A failed connection is still a successful *test*: the row remains and the
+    response carries the reason. The only errors raised here are ownership
+    (404) and a malformed id (422), both before any network activity.
+    """
+    server = _owned(registry, server_id, user_id)
+    result = await provider.test_connection(server)
+    return MCPConnectionTestResponse(**result)
 
 
 @router.delete(

@@ -1,6 +1,10 @@
-// The backend serves every route under the origin root (e.g.
-// `http://localhost:8000/api/v1/overview`), so the base is the origin only.
-export const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000';
+// nginx and the Vite development proxy forward /api to the backend.
+export const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || '').replace(/\/$/, '');
+
+let accessToken = '';
+export function setAccessToken(token: string) {
+  accessToken = token;
+}
 
 /** Thrown when the API cannot be reached at all (offline, CORS, refused). */
 export class ApiNetworkError extends Error {
@@ -34,6 +38,7 @@ async function apiRequest<T>(
       ...options,
       headers: {
         'Content-Type': 'application/json',
+        ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
         ...options.headers,
       },
     });
@@ -52,6 +57,10 @@ async function apiRequest<T>(
       message = error.detail || error.message || message;
     } catch {
       message = response.statusText || message;
+    }
+    if (response.status === 401) {
+      setAccessToken('');
+      window.dispatchEvent(new Event('nexus:unauthorized'));
     }
     throw new ApiError(response.status, message);
   }
@@ -73,7 +82,7 @@ async function apiRequest<T>(
 
 export const apiClient = {
   get: <T>(endpoint: string) => apiRequest<T>(endpoint),
-  post: <T>(endpoint: string, data: unknown) => 
+  post: <T>(endpoint: string, data?: unknown) =>
     apiRequest<T>(endpoint, {
       method: 'POST',
       body: JSON.stringify(data),

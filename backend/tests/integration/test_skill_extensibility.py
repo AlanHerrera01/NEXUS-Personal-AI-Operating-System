@@ -3,8 +3,6 @@
 import inspect
 import pkgutil
 
-import pytest
-
 from app.application.agents.orchestrator import AgentOrchestrator
 from app.domain.entities.agent_run import AgentRun
 from app.domain.ports.agent_brain import AgentDecision
@@ -109,11 +107,23 @@ def test_new_skill_does_not_require_changing_the_brain_or_planner() -> None:
     assert [definition.name for definition in orchestrator.available_tools("echo")] == ["test.echo"]
 
 
-@pytest.mark.parametrize("skill_name", ["calendar", "github", "documents", "web"])
-def test_external_integrations_are_not_implemented_yet(skill_name: str) -> None:
+def test_the_implemented_skill_packages_are_discoverable() -> None:
     import app.infrastructure.skills as skills_package
 
     available = {package.name for package in pkgutil.iter_modules(skills_package.__path__)}
 
-    assert available == {"tasks", "memory"}
-    assert skill_name not in available
+    # The first two were the original set. Calendar and web followed, and both
+    # are packages in the discovered layout. GitHub is imported directly by the
+    # composition root rather than being a package with an __init__.py marker.
+    assert {
+        "tasks",
+        "memory",
+        "calendar",
+        "web",
+        "files",
+        "knowledge",
+        "reminders",
+        "mail",
+        "docker",
+        "git",
+    } <= available

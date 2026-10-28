@@ -48,6 +48,20 @@ class NebiusLLMProvider(LLMProvider):
             try:
                 response_payload = await self.client.create_chat_completion(payload)
                 response = response_from_payload(response_payload, model)
+                if not response.content:
+                    # An empty completion is not an answer, and the caller can
+                    # only report it as such. The reason is in the payload: a
+                    # reasoning model that spent its whole budget before writing
+                    # any content finishes on "length" with the text in
+                    # `reasoning_content` instead. Logging that distinction is
+                    # what makes the difference between a budget problem and a
+                    # provider problem visible.
+                    logger.warning(
+                        "LLM returned empty content model=%s finish_reason=%s completion_tokens=%s",
+                        response.model,
+                        response.finish_reason,
+                        response.usage.completion_tokens if response.usage else None,
+                    )
                 logger.info(
                     "LLM request completed model=%s duration_ms=%d total_tokens=%s",
                     response.model,

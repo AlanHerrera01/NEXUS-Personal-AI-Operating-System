@@ -1,12 +1,22 @@
-from datetime import datetime
+from pydantic import Field, model_validator
 
 from app.application.tools.base import UseCaseTool
-from app.domain.ports.tool import ToolInput, ToolOutput
+from app.domain.ports.tool import ToolContext, ToolInput, ToolOutput
+from app.domain.value_objects.risk_level import RiskLevel
+from app.infrastructure.skills.github.client import GitHubClient, OWNER_PATTERN
 
 
 class ListGitHubReposInput(ToolInput):
-    user: str | None = None
-    org: str | None = None
+    user: str | None = Field(default=None, pattern=OWNER_PATTERN, max_length=39)
+    org: str | None = Field(default=None, pattern=OWNER_PATTERN, max_length=39)
+    limit: int = Field(default=30, ge=1, le=100)
+    page: int = Field(default=1, ge=1, le=1000)
+
+    @model_validator(mode="after")
+    def one_owner(self):
+        if self.user and self.org:
+            raise ValueError("Choose user or org, not both")
+        return self
 
 
 class GitHubRepoOutput(ToolOutput):
@@ -18,62 +28,17 @@ class GitHubRepoOutput(ToolOutput):
     private: bool = False
 
 
+class GitHubReposOutput(ToolOutput):
+    items: list[GitHubRepoOutput]
+    page: int
+
+
 class ListGitHubReposTool(UseCaseTool):
-    """Lista repositorios de GitHub - SIMULATION MODE.
+    def __init__(self, client: GitHubClient | None = None) -> None:
+        self.client = client or GitHubClient()
+        super().__init__(name="github.list_repos", description="List GitHub repositories. Public user/org listings need no token; omit user/org only with a configured token to list its owner's repositories.", skill_name="github", input_model=ListGitHubReposInput, input_schema=ListGitHubReposInput.model_json_schema(), risk_level=RiskLevel.LOW, read_only=True)
 
-    En modo simulation, devuelve repositorios de ejemplo del usuario.
-    En producción real, conectaría con la API de GitHub.
-    """
-
-    def __init__(self) -> None:
-        super().__init__(
-            name="github.list_repos",
-            description="List GitHub repositories for a user or organization",
-            skill_name="github",
-            input_model=ListGitHubReposInput,
-            input_schema=ListGitHubReposInput.model_json_schema(),
-            risk_level="LOW",
-            read_only=True,
-            side_effect=False,
-            requires_confirmation=False,
-        )
-
-    async def run(self, payload: ListGitHubReposInput) -> list[GitHubRepoOutput]:
-        # SIMULATION: Devolver repositorios de ejemplo
-        # Usar el usuario por defecto o el especificado
-        user = payload.user or "nexus-ai"
-        org = payload.org or None
-
-        # Repositorios de ejemplo
-        repos = [
-            GitHubRepoOutput(
-                id="1",
-                name="nexus-os",
-                full_name=f"{user}/nexus-os",
-                description="Personal AI Operating System - Hackathon 2026",
-                html_url=f"https://github.com/{user}/nexus-os",
-                private=False,
-            ),
-            GitHubRepoOutput(
-                id="2",
-                name="examples",
-                full_name=f"{user}/examples",
-                description="Example projects and configurations",
-                html_url=f"https://github.com/{user}/examples",
-                private=False,
-            ),
-            GitHubRepoOutput(
-                id="3",
-                name="docs",
-                full_name=f"{user}/docs",
-                description="Documentation and DEVPOST materials",
-                html_url=f"https://github.com/{user}/docs",
-                private=False,
-            ),
-        ]
-
-        # Filtrar por organización si se especifica
-        if org:
-            repos = [r for r in repos if r.full_name.startswith(f"{org}/")]
-
-        return repos
+    async def run(self, payload: ListGitHubReposInput, context: ToolContext) -> GitHubReposOutput:
+        path = f"/orgs/{payload.org}/repos" if payload.org else f"/users/{payload.user}/repos" if payload.user else "/user/repos"
+        data = await self.client.request("GET", path, context, params={"per_page": payload.limit, "page": payload.page, "sort": "updated"})
+        return GitHubReposOutput(items=[GitHubRepoOutput(id=str(item["id"]), name=item["name"], full_name=item["full_name"], description=item.get("description"), html_url=item.get("html_url"), private=item.get("private", False)) for item in data], page=payload.page)

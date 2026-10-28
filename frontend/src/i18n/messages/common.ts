@@ -1,0 +1,76 @@
+/**
+ * Labels shared by more than one screen.
+ *
+ * Kept small on purpose: a word belongs here when two screens genuinely mean
+ * the same thing by it. "Guardar" on a settings form and "Guardar" on a task
+ * dialog are the same word, but "Estado" as a run status and "Estado" as a
+ * health check are not, and sharing a key between those two is how a German
+ * translation ends up with the wrong one of the two words.
+ */
+export const es = {
+  retry: 'Reintentar',
+  refresh: 'Actualizar',
+  reload: 'Recargar',
+  save: 'Guardar',
+  saving: 'Guardando…',
+  cancel: 'Cancelar',
+  close: 'Cerrar',
+  edit: 'Editar',
+  delete: 'Eliminar',
+  create: 'Crear',
+  search: 'Buscar',
+  filter: 'Filtrar',
+  all: 'Todos',
+  none: 'Ninguno',
+  actions: 'Acciones',
+  details: 'Detalles',
+  status: 'Estado',
+  name: 'Nombre',
+  description: 'Descripción',
+  loading: 'Consultando al backend…',
+  noData: 'Sin datos',
+  empty: 'Nada que mostrar',
+  notExposed: 'NO EXPUESTO',
+  comingSoon: 'Módulo en desarrollo',
+  error: 'Error',
+  yes: 'Sí',
+  no: 'No',
+  copy: 'Copiar',
+  copied: 'Copiado',
+  unavailable: 'No disponible',
+  unknown: '--',
+};
+
+export const en: typeof es = {
+  retry: 'Retry',
+  refresh: 'Refresh',
+  reload: 'Reload',
+  save: 'Save',
+  saving: 'Saving…',
+  cancel: 'Cancel',
+  close: 'Close',
+  edit: 'Edit',
+  delete: 'Delete',
+  create: 'Create',
+  search: 'Search',
+  filter: 'Filter',
+  all: 'All',
+  none: 'None',
+  actions: 'Actions',
+  details: 'Details',
+  status: 'Status',
+  name: 'Name',
+  description: 'Description',
+  loading: 'Querying the backend…',
+  noData: 'No data',
+  empty: 'Nothing to show',
+  notExposed: 'NOT EXPOSED',
+  comingSoon: 'Module in development',
+  error: 'Error',
+  yes: 'Yes',
+  no: 'No',
+  copy: 'Copy',
+  copied: 'Copied',
+  unavailable: 'Unavailable',
+  unknown: '--',
+};

@@ -1,22 +1,26 @@
 import { useState, type ReactNode } from 'react';
 import { useAsyncData } from '../hooks/useAsyncData';
+import { useI18n } from '../hooks/useI18n';
 import { useOverview } from '../hooks/useOverview';
 import { healthApi } from '../services/api/healthApi';
 import { memoryApi } from '../services/api/memoryApi';
 import { settingsApi } from '../services/api/settingsApi';
 import { API_BASE_URL } from '../services/api/apiClient';
 import { ErrorRow, LoadingRow } from '../components/ui/PageShell';
+import type { MessageKey } from '../i18n/types';
 import type { RuntimeSettings, RuntimeSettingsUpdate } from '../types';
 
 type TabKey = 'general' | 'model' | 'memory' | 'runtime' | 'trust' | 'about';
 
-const TABS: { key: TabKey; label: string; icon: string }[] = [
-  { key: 'general', label: 'General', icon: 'tune' },
-  { key: 'model', label: 'Modelo & Inferencia', icon: 'neurology' },
-  { key: 'memory', label: 'Memoria & Privacidad', icon: 'memory' },
-  { key: 'runtime', label: 'Entorno & Runtime', icon: 'deployed_code' },
-  { key: 'trust', label: 'Seguridad & Confianza', icon: 'shield' },
-  { key: 'about', label: 'Acerca de NEXUS', icon: 'info' },
+/* The tabs carry a key rather than a label so the list stays a module constant:
+   translating at render is what lets the switch relabel them without a rebuild. */
+const TABS: { key: TabKey; labelKey: MessageKey; icon: string }[] = [
+  { key: 'general', labelKey: 'pages.settings.tabs.general', icon: 'tune' },
+  { key: 'model', labelKey: 'pages.settings.tabs.model', icon: 'neurology' },
+  { key: 'memory', labelKey: 'pages.settings.tabs.memory', icon: 'memory' },
+  { key: 'runtime', labelKey: 'pages.settings.tabs.runtime', icon: 'deployed_code' },
+  { key: 'trust', labelKey: 'pages.settings.tabs.trust', icon: 'shield' },
+  { key: 'about', labelKey: 'pages.settings.tabs.about', icon: 'info' },
 ];
 
 function formatUptime(seconds: number | undefined): string {
@@ -124,9 +128,10 @@ function TextField({
 
 /** A saved-override marker, so edited fields are visible at a glance. */
 function OverrideBadge() {
+  const { t } = useI18n();
   return (
     <span className="font-label-mono-xs text-label-mono-xs px-1.5 py-0.5 rounded bg-primary-container/30 text-primary">
-      MODIFICADO
+      {t('pages.settings.overridden')}
     </span>
   );
 }
@@ -209,6 +214,7 @@ function formFrom(settings: RuntimeSettings): SettingsForm {
 }
 
 export default function Settings() {
+  const { t, formatDateTime, formatNumber } = useI18n();
   const { data, connected, refresh } = useOverview();
   const health = useAsyncData(() => healthApi.get(), []);
   const llm = useAsyncData(() => healthApi.llm(), []);
@@ -259,12 +265,16 @@ export default function Settings() {
     anchor.download = `nexus-vectors-${agentId?.slice(0, 8) ?? 'agent'}.jsonl`;
     anchor.click();
     URL.revokeObjectURL(url);
-    showToast('Descargando snapshot de vectores (.jsonl)', 'download_done');
+    showToast(t('pages.settings.memory.backupToast'), 'download_done');
   };
 
   const decision = data?.trust.default_decision ?? '--';
   const decisionLabel =
-    decision === 'ASK' ? 'ESTRICTO (Zero-Trust ASK)' : decision === 'ALLOW' ? 'PERMISIVO' : decision;
+    decision === 'ASK'
+      ? t('pages.settings.trust.strict')
+      : decision === 'ALLOW'
+        ? t('pages.settings.trust.permissive')
+        : decision;
 
   // Editing is only offered when the override store answered. Otherwise a save
   // would reach the backend and 503, which reads as "your click did nothing".
@@ -297,7 +307,7 @@ export default function Settings() {
     }
 
     if (Object.keys(changes).length === 0) {
-      showToast('No hay cambios que guardar.', 'info');
+      showToast(t('pages.settings.toasts.noChanges'), 'info');
       return;
     }
 
@@ -307,9 +317,9 @@ export default function Settings() {
       // Drop the local edits so the re-fetch's values become the baseline.
       setEdits({});
       settings.reload();
-      showToast('Ajustes guardados y aplicados al runtime.', 'save');
+      showToast(t('pages.settings.toasts.saved'), 'save');
     } catch (error) {
-      showToast(error instanceof Error ? error.message : 'No se pudieron guardar los ajustes.', 'error');
+      showToast(error instanceof Error ? error.message : t('pages.settings.toasts.saveFailed'), 'error');
     } finally {
       setSaving(false);
     }
@@ -326,9 +336,9 @@ export default function Settings() {
         request_timeout_seconds: null,
       });
       settings.reload();
-      showToast('Ajustes restablecidos a los valores del entorno.', 'restart_alt');
+      showToast(t('pages.settings.toasts.reset'), 'restart_alt');
     } catch (error) {
-      showToast(error instanceof Error ? error.message : 'No se pudieron restablecer los ajustes.', 'error');
+      showToast(error instanceof Error ? error.message : t('pages.settings.toasts.resetFailed'), 'error');
     } finally {
       setSaving(false);
     }
@@ -342,9 +352,12 @@ export default function Settings() {
       setSaving(true);
       await settingsApi.update({ notifications_enabled: next });
       settings.reload();
-      showToast(`Notificaciones ${next ? 'activadas' : 'desactivadas'}.`, 'notifications');
+      showToast(
+        t(next ? 'pages.settings.trust.notificationsOn' : 'pages.settings.trust.notificationsOff'),
+        'notifications',
+      );
     } catch (error) {
-      showToast(error instanceof Error ? error.message : 'No se pudo cambiar la preferencia.', 'error');
+      showToast(error instanceof Error ? error.message : t('pages.settings.toasts.preferenceFailed'), 'error');
     } finally {
       setSaving(false);
     }
@@ -355,11 +368,10 @@ export default function Settings() {
       <span className="material-symbols-outlined text-error text-[20px] mt-0.5">cloud_off</span>
       <div className="flex flex-col">
         <span className="font-body-md text-body-md font-medium text-on-surface">
-          Almacén de ajustes no disponible
+          {t('pages.settings.storage.title')}
         </span>
         <span className="font-body-sm text-body-sm text-on-surface-variant">
-          El backend no pudo leer la tabla de ajustes, así que se muestran los valores del entorno.
-          No se pueden guardar cambios hasta que el almacén responda.
+          {t('pages.settings.storage.detail')}
         </span>
       </div>
     </div>
@@ -372,15 +384,15 @@ export default function Settings() {
         <div className="flex flex-col md:flex-row md:items-end justify-between gap-space-md">
           <div>
             <div className="flex items-center gap-space-xs font-label-mono-xs text-label-mono-xs uppercase text-primary tracking-widest mb-1">
-              <span>SYS_CONFIG // KERNEL_CTL</span>
+              <span>{t('pages.settings.eyebrow')}</span>
               <span className="text-outline">/</span>
-              <span className="text-on-surface-variant">HOST_LOCAL</span>
+              <span className="text-on-surface-variant">{t('pages.settings.eyebrowHost')}</span>
             </div>
             <h1 className="font-headline-lg text-headline-lg text-on-surface font-semibold tracking-tight">
-              Configuración del Sistema
+              {t('pages.settings.title')}
             </h1>
             <p className="font-body-sm text-body-sm text-on-surface-variant max-w-3xl mt-0.5">
-              Estado en vivo de modelos, memoria, entorno de ejecución y postura del Trust Engine.
+              {t('pages.settings.description')}
             </p>
           </div>
           <div className="flex items-center gap-space-sm self-start md:self-auto">
@@ -388,18 +400,22 @@ export default function Settings() {
               <span className="material-symbols-outlined text-[16px]">
                 {settings.data?.storage_available ? 'tune' : 'lock'}
               </span>
-              {settings.data?.storage_available ? 'PARÁMETROS EDITABLES' : 'SOLO LECTURA'}
+              {t(
+                settings.data?.storage_available
+                  ? 'pages.settings.editable'
+                  : 'pages.settings.readOnly',
+              )}
             </span>
             <button
               type="button"
               onClick={() => {
                 reloadAll();
-                showToast('Estado recargado desde el backend.', 'refresh');
+                showToast(t('pages.settings.reloaded'), 'refresh');
               }}
               className="px-space-md py-1.5 rounded-lg bg-surface-container text-on-surface-variant hover:text-on-surface hover:bg-surface-container-high transition-colors font-body-sm text-body-sm flex items-center gap-1.5 shadow-sm"
             >
               <span className="material-symbols-outlined text-[16px]">refresh</span>
-              <span>Recargar</span>
+              <span>{t('common.reload')}</span>
             </button>
           </div>
         </div>
@@ -422,7 +438,7 @@ export default function Settings() {
               ) : (
                 <span className="material-symbols-outlined text-[16px]">{item.icon}</span>
               )}
-              <span>{item.label}</span>
+              <span>{t(item.labelKey)}</span>
             </button>
           ))}
         </div>
@@ -434,8 +450,8 @@ export default function Settings() {
             <SectionCard
               icon="lan"
               iconTone="text-primary"
-              title="Conexión con el Backend"
-              subtitle="FastAPI Core Runtime y parámetros de conexión del cliente."
+              title={t('pages.settings.connection.title')}
+              subtitle={t('pages.settings.connection.subtitle')}
               badge={
                 <div
                   className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-surface-container-lowest font-label-mono-xs text-label-mono-xs ${
@@ -443,14 +459,20 @@ export default function Settings() {
                   }`}
                 >
                   <span className={`w-1.5 h-1.5 rounded-full ${connected ? 'bg-tertiary animate-pulse' : 'bg-error'}`} />
-                  <span>{connected ? 'BACKEND ALCANZABLE' : 'BACKEND INALCANZABLE'}</span>
+                  <span>
+                    {t(
+                      connected
+                        ? 'pages.settings.connection.reachable'
+                        : 'pages.settings.connection.unreachable',
+                    )}
+                  </span>
                 </div>
               }
             >
               <div className="grid grid-cols-1 md:grid-cols-2 gap-space-md">
                 <div className="flex flex-col gap-1.5">
                   <label className="font-label-mono-xs text-label-mono-xs uppercase text-on-surface-variant font-medium">
-                    Endpoint Base del Cliente
+                    {t('pages.settings.connection.endpoint')}
                   </label>
                   <ReadOnlyValue
                     mono
@@ -470,18 +492,23 @@ export default function Settings() {
                     }
                   />
                   <span className="font-body-sm text-body-sm text-outline">
-                    El cliente añade las rutas (<span className="font-code-base">/api/v1/…</span>) sobre esta base.
+                    {t('pages.settings.connection.routesHint')}
+                    <span className="font-code-base">/api/v1/…</span>
+                    {t('pages.settings.connection.routesHintAfter')}
                   </span>
                 </div>
                 <div className="flex flex-col gap-1.5">
                   <label className="font-label-mono-xs text-label-mono-xs uppercase text-on-surface-variant font-medium">
-                    Entorno del Servidor
+                    {t('pages.settings.connection.environment')}
                   </label>
                   <ReadOnlyValue
                     value={<span className="w-full">{data?.system.environment ?? '--'}</span>}
                   />
                   <span className="font-body-sm text-body-sm text-outline">
-                    Fase: {health.data?.phase ?? '--'} · Servicio: {health.data?.service ?? '--'}
+                    {t('pages.settings.connection.environmentHint', {
+                      phase: health.data?.phase ?? '--',
+                      service: health.data?.service ?? '--',
+                    })}
                   </span>
                 </div>
               </div>
@@ -493,15 +520,15 @@ export default function Settings() {
                   </div>
                   <div className="flex flex-col">
                     <span className="font-body-md text-body-md font-medium text-on-surface">
-                      Comunicación REST (JSON)
+                      {t('pages.settings.connection.restTitle')}
                     </span>
                     <span className="font-body-sm text-body-sm text-outline">
-                      El backend no expone streaming SSE ni tokens incremental.
+                      {t('pages.settings.connection.restDetail')}
                     </span>
                   </div>
                 </div>
                 <span className="font-label-mono-xs text-label-mono-xs px-2 py-1 rounded bg-surface-container-highest text-on-surface">
-                  SIN SSE
+                  {t('pages.settings.connection.noSse')}
                 </span>
               </div>
             </SectionCard>
@@ -510,8 +537,8 @@ export default function Settings() {
           {(tab === 'general' || tab === 'model') && (
             <SectionCard
               icon="neurology"
-              title="Proveedor de Modelo & Inferencia"
-              subtitle="Modelo fundacional y parámetros de generación aplicados en caliente."
+              title={t('pages.settings.model.title')}
+              subtitle={t('pages.settings.model.subtitle')}
               badge={
                 <div
                   className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-surface-container-lowest font-label-mono-xs text-label-mono-xs ${
@@ -519,12 +546,18 @@ export default function Settings() {
                   }`}
                 >
                   <span className={`w-1.5 h-1.5 rounded-full ${data?.model.configured ? 'bg-tertiary animate-pulse' : 'bg-error'}`} />
-                  <span>{data?.model.configured ? 'CREDENCIALES OK' : 'SIN CREDENCIALES'}</span>
+                  <span>
+                    {t(
+                      data?.model.configured
+                        ? 'pages.settings.model.credentialsOk'
+                        : 'pages.settings.model.noCredentials',
+                    )}
+                  </span>
                 </div>
               }
             >
               {settings.loading && !settings.data ? (
-                <LoadingRow label="Consultando ajustes…" />
+                <LoadingRow label={t('pages.settings.model.loading')} />
               ) : settings.error ? (
                 <ErrorRow message={settings.error} onRetry={settings.reload} />
               ) : (
@@ -533,17 +566,22 @@ export default function Settings() {
 
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-space-md">
                     <TextField
-                      label="Modelo Activo"
+                      label={t('pages.settings.model.active')}
                       value={form?.model ?? ''}
                       onChange={(value) => setEdits((prev) => ({ ...prev, model: value }))}
                       disabled={!canEdit}
                       mono
                       badge={isOverridden('model') ? <OverrideBadge /> : null}
-                      hint={<>Predeterminado del entorno: <span className="font-code-base">{defaultOf('model')}</span></>}
+                      hint={
+                        <>
+                          {t('pages.settings.model.environmentDefault')}
+                          <span className="font-code-base">{defaultOf('model')}</span>
+                        </>
+                      }
                     />
                     <div className="flex flex-col gap-1.5">
                       <label className="font-label-mono-xs text-label-mono-xs uppercase text-on-surface-variant font-medium">
-                        Proveedor de Inferencia
+                        {t('pages.settings.model.provider')}
                       </label>
                       <ReadOnlyValue
                         value={
@@ -554,8 +592,18 @@ export default function Settings() {
                         }
                       />
                       <span className="font-body-sm text-body-sm text-outline">
-                        Clave API: {settings.data?.provider.api_key_configured ? 'configurada' : 'ausente'} · Base URL:{' '}
-                        {settings.data?.provider.base_url_configured ? 'configurada' : 'ausente'}. No editables desde el panel.
+                        {t('pages.settings.model.providerStatus', {
+                          apiKey: t(
+                            settings.data?.provider.api_key_configured
+                              ? 'pages.settings.model.configured'
+                              : 'pages.settings.model.absent',
+                          ),
+                          baseUrl: t(
+                            settings.data?.provider.base_url_configured
+                              ? 'pages.settings.model.configured'
+                              : 'pages.settings.model.absent',
+                          ),
+                        })}
                       </span>
                     </div>
                   </div>
@@ -564,10 +612,10 @@ export default function Settings() {
                     <div className="flex flex-wrap items-center justify-between gap-space-sm">
                       <div className="flex items-center gap-2">
                         <span className="font-label-mono-xs text-label-mono-xs uppercase text-on-surface font-semibold">
-                          Parámetros de Generación
+                          {t('pages.settings.model.generation')}
                         </span>
                         <span className="font-label-mono-xs text-label-mono-xs px-2 py-0.5 rounded bg-surface-container-highest text-outline">
-                          APLICADOS EN CALIENTE
+                          {t('pages.settings.model.hotApplied')}
                         </span>
                       </div>
                       <div className="flex items-center gap-2">
@@ -578,7 +626,7 @@ export default function Settings() {
                           className="px-space-md py-1.5 rounded-lg bg-surface-container-high hover:bg-surface-bright disabled:opacity-50 text-on-surface font-body-sm text-body-sm transition-colors flex items-center gap-1"
                         >
                           <span className="material-symbols-outlined text-[15px]">restart_alt</span>
-                          <span>Restablecer entorno</span>
+                          <span>{t('pages.settings.model.resetEnvironment')}</span>
                         </button>
                         <button
                           type="button"
@@ -589,14 +637,14 @@ export default function Settings() {
                           <span className="material-symbols-outlined text-[15px]">
                             {saving ? 'progress_activity' : 'save'}
                           </span>
-                          <span>{saving ? 'Guardando…' : 'Guardar'}</span>
+                          <span>{t(saving ? 'common.saving' : 'common.save')}</span>
                         </button>
                       </div>
                     </div>
 
                     <div className="grid grid-cols-1 sm:grid-cols-3 gap-space-md">
                       <TextField
-                        label="Temperatura"
+                        label={t('pages.settings.model.temperature')}
                         type="number"
                         min={0}
                         max={2}
@@ -605,10 +653,14 @@ export default function Settings() {
                         onChange={(value) => setEdits((prev) => ({ ...prev, temperature: value }))}
                         disabled={!canEdit}
                         badge={isOverridden('temperature') ? <OverrideBadge /> : null}
-                        hint={<>Predeterminado: {defaultOf('temperature')}</>}
+                        hint={
+                          <>
+                            {t('pages.settings.model.defaultHint', { value: defaultOf('temperature') })}
+                          </>
+                        }
                       />
                       <TextField
-                        label="Máx. Tokens"
+                        label={t('pages.settings.model.maxTokens')}
                         type="number"
                         min={1}
                         max={32768}
@@ -617,10 +669,14 @@ export default function Settings() {
                         onChange={(value) => setEdits((prev) => ({ ...prev, maxTokens: value }))}
                         disabled={!canEdit}
                         badge={isOverridden('max_tokens') ? <OverrideBadge /> : null}
-                        hint={<>Predeterminado: {defaultOf('max_tokens')}</>}
+                        hint={
+                          <>
+                            {t('pages.settings.model.defaultHint', { value: defaultOf('max_tokens') })}
+                          </>
+                        }
                       />
                       <TextField
-                        label="Timeout (s)"
+                        label={t('pages.settings.model.timeout')}
                         type="number"
                         min={1}
                         max={600}
@@ -629,19 +685,26 @@ export default function Settings() {
                         onChange={(value) => setEdits((prev) => ({ ...prev, timeout: value }))}
                         disabled={!canEdit}
                         badge={isOverridden('request_timeout_seconds') ? <OverrideBadge /> : null}
-                        hint={<>Predeterminado: {defaultOf('request_timeout_seconds')}</>}
+                        hint={
+                          <>
+                            {t('pages.settings.model.defaultHint', {
+                              value: defaultOf('request_timeout_seconds'),
+                            })}
+                          </>
+                        }
                       />
                     </div>
 
                     <span className="font-body-sm text-body-sm text-outline">
-                      Los valores modificados se guardan en el backend y sustituyen al entorno en la siguiente llamada
-                      al modelo. No hay listado de modelos disponibles: el identificador se escribe en texto.
+                      {t('pages.settings.model.overridesNote')}
                     </span>
                   </div>
 
                   <div className="grid grid-cols-1 sm:grid-cols-3 gap-space-sm pt-space-xs">
                     <div className="bg-surface-container-lowest p-space-md rounded-lg flex flex-col gap-1 shadow-sm">
-                      <span className="font-label-mono-xs text-label-mono-xs uppercase text-outline">Modelo</span>
+                      <span className="font-label-mono-xs text-label-mono-xs uppercase text-outline">
+                        {t('pages.settings.model.statModel')}
+                      </span>
                       <span className="font-headline-sm text-headline-sm font-semibold text-on-surface truncate">
                         {settings.data?.model ?? data?.model.model ?? '--'}
                       </span>
@@ -650,18 +713,26 @@ export default function Settings() {
                       </span>
                     </div>
                     <div className="bg-surface-container-lowest p-space-md rounded-lg flex flex-col gap-1 shadow-sm">
-                      <span className="font-label-mono-xs text-label-mono-xs uppercase text-outline">Configurado</span>
-                      <span className={`font-headline-sm text-headline-sm font-semibold ${data?.model.configured ? 'text-tertiary' : 'text-error'}`}>
-                        {data?.model.configured ? 'SÍ' : 'NO'}
+                      <span className="font-label-mono-xs text-label-mono-xs uppercase text-outline">
+                        {t('pages.settings.model.statConfigured')}
                       </span>
-                      <span className="font-body-sm text-body-sm text-on-surface-variant">Credenciales del proveedor</span>
+                      <span className={`font-headline-sm text-headline-sm font-semibold ${data?.model.configured ? 'text-tertiary' : 'text-error'}`}>
+                        {t(data?.model.configured ? 'common.yes' : 'common.no')}
+                      </span>
+                      <span className="font-body-sm text-body-sm text-on-surface-variant">
+                        {t('pages.settings.model.statCredentials')}
+                      </span>
                     </div>
                     <div className="bg-surface-container-lowest p-space-md rounded-lg flex flex-col gap-1 shadow-sm">
-                      <span className="font-label-mono-xs text-label-mono-xs uppercase text-outline">Uptime</span>
+                      <span className="font-label-mono-xs text-label-mono-xs uppercase text-outline">
+                        {t('pages.settings.model.statUptime')}
+                      </span>
                       <span className="font-headline-sm text-headline-sm font-semibold text-on-surface">
                         {formatUptime(data?.system.uptime_seconds)}
                       </span>
-                      <span className="font-body-sm text-body-sm text-on-surface-variant">Servicio backend</span>
+                      <span className="font-body-sm text-body-sm text-on-surface-variant">
+                        {t('pages.settings.model.statBackend')}
+                      </span>
                     </div>
                   </div>
                 </>
@@ -672,19 +743,21 @@ export default function Settings() {
           {(tab === 'general' || tab === 'memory') && (
             <SectionCard
               icon="database"
-              title="Memoria & Privacidad"
-              subtitle="Almacenamiento vectorial y datos persistentes del agente."
+              title={t('pages.settings.memory.title')}
+              subtitle={t('pages.settings.memory.subtitle')}
             >
               <div className="flex flex-col gap-space-sm">
                 <div className="p-space-md rounded-lg bg-surface-container-lowest flex items-center justify-between shadow-sm">
                   <div className="flex flex-col">
                     <span className="font-body-md text-body-md font-medium text-on-surface">
-                      Base de Memoria Vectorial
+                      {t('pages.settings.memory.vectorStore')}
                     </span>
                     <span className="font-label-mono-xs text-label-mono-xs text-tertiary">
                       {memories.loading
-                        ? 'Consultando…'
-                        : `${memories.data?.length ?? 0} recuerdos cargados · pgvector`}
+                        ? t('pages.settings.memory.querying')
+                        : t('pages.settings.memory.loaded', {
+                            count: formatNumber(memories.data?.length ?? 0),
+                          })}
                     </span>
                   </div>
                   <button
@@ -694,17 +767,17 @@ export default function Settings() {
                     className="px-space-md py-1.5 rounded-lg bg-surface-container-high hover:bg-surface-bright disabled:opacity-50 text-on-surface font-body-sm text-body-sm transition-colors flex items-center gap-1"
                   >
                     <span className="material-symbols-outlined text-[15px]">download</span>
-                    <span>Backup (.jsonl)</span>
+                    <span>{t('pages.settings.memory.backup')}</span>
                   </button>
                 </div>
 
                 <div className="p-space-md rounded-lg bg-surface-container-lowest flex items-center justify-between shadow-sm">
                   <div className="flex flex-col">
                     <span className="font-body-md text-body-md font-medium text-on-surface">
-                      Purgar Caché Local
+                      {t('pages.settings.memory.purge')}
                     </span>
                     <span className="font-body-sm text-body-sm text-outline">
-                      No existe un endpoint de purga de caché en el backend.
+                      {t('pages.settings.memory.purgeDetail')}
                     </span>
                   </div>
                   <button
@@ -713,7 +786,7 @@ export default function Settings() {
                     className="px-space-md py-1.5 rounded-lg bg-surface-container-high text-outline font-body-sm text-body-sm cursor-not-allowed flex items-center gap-1"
                   >
                     <span className="material-symbols-outlined text-[15px]">cleaning_services</span>
-                    <span>No disponible</span>
+                    <span>{t('common.unavailable')}</span>
                   </button>
                 </div>
               </div>
@@ -725,8 +798,8 @@ export default function Settings() {
           {(tab === 'general' || tab === 'runtime') && (
             <SectionCard
               icon="deployed_code"
-              title="Entorno & Runtime"
-              subtitle="Sandbox de ejecución de herramientas."
+              title={t('pages.settings.runtime.title')}
+              subtitle={t('pages.settings.runtime.subtitle')}
               badge={
                 <div
                   className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-surface-container-lowest font-label-mono-xs text-label-mono-xs ${
@@ -734,24 +807,33 @@ export default function Settings() {
                   }`}
                 >
                   <span className={`w-1.5 h-1.5 rounded-full ${runtime.data?.available ? 'bg-tertiary' : 'bg-error'}`} />
-                  <span>{runtime.data?.available ? 'DISPONIBLE' : 'NO DISPONIBLE'}</span>
+                  <span>
+                    {t(
+                      runtime.data?.available
+                        ? 'pages.settings.runtime.available'
+                        : 'pages.settings.runtime.unavailable',
+                    )}
+                  </span>
                 </div>
               }
             >
               {runtime.loading ? (
-                <LoadingRow label="Consultando runtime…" />
+                <LoadingRow label={t('pages.settings.runtime.loading')} />
               ) : runtime.error ? (
                 <ErrorRow message={runtime.error} onRetry={runtime.reload} />
               ) : (
                 <div className="flex flex-col">
-                  <Row label="Provider" value={runtime.data?.provider ?? '--'} />
+                  <Row label={t('pages.settings.runtime.provider')} value={runtime.data?.provider ?? '--'} />
                   <Row
-                    label="Disponible"
-                    value={runtime.data?.available ? 'SÍ' : 'NO'}
+                    label={t('pages.settings.runtime.availability')}
+                    value={t(runtime.data?.available ? 'common.yes' : 'common.no')}
                     tone={runtime.data?.available ? 'text-tertiary' : 'text-error'}
                   />
-                  <Row label="Versión" value={runtime.data?.version ?? '--'} />
-                  <Row label="Detalle" value={runtime.data?.detail || 'sin detalle'} />
+                  <Row label={t('pages.settings.runtime.version')} value={runtime.data?.version ?? '--'} />
+                  <Row
+                    label={t('pages.settings.runtime.detail')}
+                    value={runtime.data?.detail || t('pages.settings.runtime.noDetail')}
+                  />
                 </div>
               )}
             </SectionCard>
@@ -761,12 +843,12 @@ export default function Settings() {
             <SectionCard
               icon="security"
               iconTone="text-tertiary"
-              title="Trust Engine"
-              subtitle="Políticas de aislamiento y permisos."
+              title={t('pages.settings.trust.title')}
+              subtitle={t('pages.settings.trust.subtitle')}
             >
               <div className="flex flex-col gap-space-sm">
                 <label className="font-label-mono-xs text-label-mono-xs uppercase text-on-surface-variant font-medium">
-                  Decisión por Defecto (servidor)
+                  {t('pages.settings.trust.defaultDecision')}
                 </label>
                 <div className="flex items-start gap-space-sm p-space-md rounded-lg bg-surface-container-high">
                   <span className="material-symbols-outlined text-tertiary text-[20px] mt-0.5">shield</span>
@@ -776,21 +858,32 @@ export default function Settings() {
                         {decisionLabel}
                       </span>
                       <span className="font-label-mono-xs text-label-mono-xs px-1.5 py-0.5 rounded bg-tertiary-container/30 text-tertiary">
-                        ACTUAL
+                        {t('pages.settings.trust.current')}
                       </span>
                     </div>
                     <p className="font-body-sm text-body-sm text-outline mt-0.5">
-                      Modo reportado por el backend y deliberadamente no editable: ALLOW convertiría al Trust Engine
-                      en un sello ciego. Se configura en el entorno del servidor.
+                      {t('pages.settings.trust.decisionNote')}
                     </p>
                   </div>
                 </div>
 
                 <div className="flex flex-col">
-                  <Row label="Concesiones ALLOW" value={String(data?.trust.allow_grants ?? 0)} tone="text-tertiary" />
-                  <Row label="Concesiones ASK" value={String(data?.trust.ask_grants ?? 0)} tone="text-primary" />
-                  <Row label="Concesiones DENY" value={String(data?.trust.deny_grants ?? 0)} tone="text-error" />
-                  <Row label="Total" value={String(data?.trust.total_grants ?? 0)} />
+                  <Row
+                    label={t('pages.settings.trust.allowGrants')}
+                    value={formatNumber(data?.trust.allow_grants ?? 0)}
+                    tone="text-tertiary"
+                  />
+                  <Row
+                    label={t('pages.settings.trust.askGrants')}
+                    value={formatNumber(data?.trust.ask_grants ?? 0)}
+                    tone="text-primary"
+                  />
+                  <Row
+                    label={t('pages.settings.trust.denyGrants')}
+                    value={formatNumber(data?.trust.deny_grants ?? 0)}
+                    tone="text-error"
+                  />
+                  <Row label={t('pages.settings.trust.total')} value={formatNumber(data?.trust.total_grants ?? 0)} />
                 </div>
               </div>
 
@@ -798,11 +891,10 @@ export default function Settings() {
                 <div className="flex items-center justify-between p-space-md rounded-lg bg-surface-container-lowest shadow-sm">
                   <div className="flex flex-col pr-2">
                     <span className="font-body-md text-body-md font-medium text-on-surface">
-                      Memory Sanitization Firewall
+                      {t('pages.settings.trust.firewall')}
                     </span>
                     <span className="font-body-sm text-body-sm text-outline">
-                      Refusa secretos e instrucciones al persistir. Forzado en el backend: no se puede desactivar
-                      desde el panel.
+                      {t('pages.settings.trust.firewallNote')}
                     </span>
                   </div>
                   <StaticSwitch on={settings.data?.memory_firewall_enforced ?? true} />
@@ -810,10 +902,10 @@ export default function Settings() {
                 <div className="flex items-center justify-between p-space-md rounded-lg bg-surface-container-lowest shadow-sm">
                   <div className="flex flex-col pr-2">
                     <span className="font-body-md text-body-md font-medium text-on-surface">
-                      Notificaciones de Aprobación
+                      {t('pages.settings.trust.notifications')}
                     </span>
                     <span className="font-body-sm text-body-sm text-outline">
-                      Preferencia guardada en el backend. Aún no envía avisos; solo recuerda la elección.
+                      {t('pages.settings.trust.notificationsNote')}
                     </span>
                   </div>
                   <LiveSwitch
@@ -829,21 +921,37 @@ export default function Settings() {
           {(tab === 'general' || tab === 'about') && (
             <SectionCard
               icon="info"
-              title="Acerca de NEXUS"
-              subtitle="Identidad y diagnóstico del servicio."
+              title={t('pages.settings.about.title')}
+              subtitle={t('pages.settings.about.subtitle')}
             >
               <div className="flex flex-col">
-                <Row label="Servicio" value={health.data?.service ?? '--'} />
-                <Row label="Estado" value={health.data?.status ?? '--'} tone={connected ? 'text-tertiary' : 'text-error'} />
-                <Row label="Fase" value={health.data?.phase ?? '--'} />
-                <Row label="Database" value={health.data?.database ?? data?.system.database ?? '--'} />
-                <Row label="Entorno" value={data?.system.environment ?? '--'} />
-                <Row label="Uptime" value={formatUptime(data?.system.uptime_seconds)} tone="text-tertiary" />
-                <Row label="Ajustes guardados" value={settings.data?.updated_at ?? 'sin cambios'} />
+                <Row label={t('pages.settings.about.service')} value={health.data?.service ?? '--'} />
+                <Row
+                  label={t('common.status')}
+                  value={health.data?.status ?? '--'}
+                  tone={connected ? 'text-tertiary' : 'text-error'}
+                />
+                <Row label={t('pages.settings.about.phase')} value={health.data?.phase ?? '--'} />
+                <Row
+                  label={t('pages.settings.about.database')}
+                  value={health.data?.database ?? data?.system.database ?? '--'}
+                />
+                <Row label={t('pages.settings.about.environment')} value={data?.system.environment ?? '--'} />
+                <Row
+                  label={t('pages.settings.about.uptime')}
+                  value={formatUptime(data?.system.uptime_seconds)}
+                  tone="text-tertiary"
+                />
+                <Row
+                  label={t('pages.settings.about.saved')}
+                  value={formatDateTime(
+                    settings.data?.updated_at,
+                    t('pages.settings.about.noChanges'),
+                  )}
+                />
               </div>
               <p className="font-label-mono-xs text-label-mono-xs text-outline leading-5">
-                Editable desde el panel: modelo, temperatura, máx. tokens, timeout y notificaciones. No editable:
-                clave API, base URL, trust y firewall de memoria, que se fijan en el entorno del servidor.
+                {t('pages.settings.about.note')}
               </p>
             </SectionCard>
           )}

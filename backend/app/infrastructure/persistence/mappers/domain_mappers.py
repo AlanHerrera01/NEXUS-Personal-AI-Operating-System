@@ -3,8 +3,11 @@ from datetime import datetime
 from app.domain.entities.agent import Agent
 from app.domain.entities.agent_run import AgentRun
 from app.domain.entities.calendar_event import CalendarEvent
+from app.domain.entities.conversation import Conversation
 from app.domain.entities.execution_plan import ExecutionPlan
+from app.domain.entities.knowledge_chunk import KnowledgeChunk
 from app.domain.entities.memory import Memory
+from app.domain.entities.reminder import Reminder
 from app.domain.entities.skill import Skill
 from app.domain.entities.task import Task
 from app.infrastructure.persistence.mappers.datetime_normaliser import ensure_utc
@@ -12,8 +15,11 @@ from app.infrastructure.persistence.models import (
     AgentModel,
     AgentRunModel,
     CalendarEventModel,
+    ConversationModel,
     ExecutionPlanModel,
+    KnowledgeChunkModel,
     MemoryModel,
+    ReminderModel,
     SkillModel,
     TaskModel,
 )
@@ -25,6 +31,7 @@ from app.domain.value_objects.memory_importance import MemoryImportance
 from app.domain.value_objects.memory_source import MemorySource
 from app.domain.value_objects.memory_type import MemoryType
 from app.domain.value_objects.plan_status import PlanStatus
+from app.domain.value_objects.reminder_status import ReminderStatus
 from app.domain.value_objects.risk_level import RiskLevel
 from app.domain.value_objects.task_status import TaskStatus
 
@@ -58,8 +65,11 @@ def agent_run_to_model(agent_run: AgentRun) -> AgentRunModel:
         id=agent_run.id.value,
         agent_id=agent_run.agent_id.value,
         user_id=agent_run.user_id.value if agent_run.user_id else None,
+        conversation_id=agent_run.conversation_id.value if agent_run.conversation_id else None,
         user_request=agent_run.user_request,
         status=agent_run.status.value,
+        response=agent_run.response,
+        question=agent_run.question,
         created_at=agent_run.created_at,
         updated_at=agent_run.updated_at,
     )
@@ -70,8 +80,11 @@ def agent_run_from_model(model: AgentRunModel) -> AgentRun:
         id=EntityId(model.id),
         agent_id=EntityId(model.agent_id),
         user_id=EntityId(model.user_id) if model.user_id else None,
+        conversation_id=EntityId(model.conversation_id) if model.conversation_id else None,
         user_request=model.user_request,
         status=AgentRunStatus(model.status),
+        response=model.response,
+        question=model.question,
         created_at=model.created_at,
         updated_at=model.updated_at,
     )
@@ -212,4 +225,80 @@ def skill_from_model(model: SkillModel) -> Skill:
         description=model.description,
         risk_level=RiskLevel(model.risk_level),
         enabled=model.enabled,
+    )
+
+
+def conversation_to_model(conversation: Conversation) -> ConversationModel:
+    return ConversationModel(
+        id=conversation.id.value,
+        title=conversation.title,
+        user_id=conversation.user_id.value if conversation.user_id else None,
+        created_at=conversation.created_at,
+        updated_at=conversation.updated_at,
+    )
+
+
+def conversation_from_model(model: ConversationModel) -> Conversation:
+    return Conversation(
+        id=EntityId(model.id),
+        title=model.title,
+        user_id=EntityId(model.user_id) if model.user_id else None,
+        created_at=model.created_at,
+        updated_at=model.updated_at,
+    )
+
+
+def knowledge_chunk_to_model(chunk: KnowledgeChunk) -> KnowledgeChunkModel:
+    return KnowledgeChunkModel(
+        id=chunk.id.value,
+        agent_id=chunk.agent_id.value if chunk.agent_id else None,
+        user_id=chunk.user_id.value if chunk.user_id else None,
+        source=chunk.source,
+        title=chunk.title,
+        content=chunk.content,
+        chunk_index=chunk.chunk_index,
+        document_hash=chunk.document_hash,
+        created_at=chunk.created_at,
+    )
+
+
+def knowledge_chunk_from_model(model: KnowledgeChunkModel) -> KnowledgeChunk:
+    return KnowledgeChunk(
+        id=EntityId(model.id),
+        agent_id=EntityId(model.agent_id) if model.agent_id else None,
+        user_id=EntityId(model.user_id) if model.user_id else None,
+        source=model.source,
+        title=model.title,
+        content=model.content,
+        chunk_index=model.chunk_index,
+        document_hash=model.document_hash,
+        created_at=model.created_at,
+    )
+
+
+def reminder_to_model(reminder: Reminder) -> ReminderModel:
+    return ReminderModel(
+        id=reminder.id.value,
+        agent_id=reminder.agent_id.value if reminder.agent_id else None,
+        user_id=reminder.user_id.value if reminder.user_id else None,
+        title=reminder.title,
+        notes=reminder.notes,
+        remind_at=reminder.remind_at,
+        status=reminder.status.value,
+        created_at=reminder.created_at,
+        updated_at=reminder.updated_at,
+    )
+
+
+def reminder_from_model(model: ReminderModel) -> Reminder:
+    return Reminder(
+        id=EntityId(model.id),
+        agent_id=EntityId(model.agent_id) if model.agent_id else None,
+        user_id=EntityId(model.user_id) if model.user_id else None,
+        title=model.title,
+        notes=model.notes,
+        remind_at=_required_utc(model.remind_at),
+        status=ReminderStatus(model.status),
+        created_at=model.created_at,
+        updated_at=model.updated_at,
     )

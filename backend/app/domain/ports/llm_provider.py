@@ -31,16 +31,21 @@ class TokenUsage:
 class LLMRequest:
     messages: tuple[LLMMessage, ...] | list[LLMMessage]
     model: str | None = None
-    temperature: float = 0.2
-    max_tokens: int = 512
+    #: ``None`` defers to the provider's configured value. A concrete default
+    #: here would silently outrank that configuration for every caller that does
+    #: not set one -- which is all of them but the probe route. That is how a
+    #: hard-coded 512 outlived the setting meant to replace it and truncated a
+    #: reasoning model before it emitted any content.
+    temperature: float | None = None
+    max_tokens: int | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         if not self.messages:
             raise ValueError("LLM request requires at least one message")
-        if not 0 <= self.temperature <= 2:
+        if self.temperature is not None and not 0 <= self.temperature <= 2:
             raise ValueError("temperature must be between 0 and 2")
-        if self.max_tokens < 1:
+        if self.max_tokens is not None and self.max_tokens < 1:
             raise ValueError("max_tokens must be positive")
 
 

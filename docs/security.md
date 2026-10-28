@@ -1,5 +1,9 @@
 # NEXUS Security Documentation (Fase 13)
 
+Operator APIs require bearer authentication, including approval endpoints.
+See [secure setup](secure-setup.md) for key generation, rotation, Docker exposure
+and migration of existing database volumes.
+
 ## Security Architecture
 The execution path is strictly ordered: User -> Frontend -> API -> Agent Orchestrator -> PlanValidator -> TrustEngine -> ToolExecutor -> (MCP/Native) -> Agent Runtime -> Sandbox. LLM produces reasoning/proposals only; never authorizes or executes.
 

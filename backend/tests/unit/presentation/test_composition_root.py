@@ -60,11 +60,20 @@ class TestRuntimeToolExecutorWiring:
         # only holds if the registry executor is still reachable.
         assert isinstance(orchestrator().tool_executor.delegate, RegistryToolExecutor)
 
-    def test_sandboxed_tools_follow_the_runtime_enabled_flag(self) -> None:
-        # The default configuration has the runtime switched off, so the wired
-        # executor carries no sandboxed tools. What must hold in both states is
-        # that it is the sandboxing executor, so enabling the runtime cannot
-        # require a code change to take effect.
+    def test_sandboxed_tools_follow_the_runtime_enabled_flag(self, monkeypatch) -> None:
+        from app.presentation.dependencies import runtime as runtime_module
+
+        # Pin the setting instead of reading the developer's backend/.env: a
+        # local file that enables the runtime must not turn this assertion red.
+        monkeypatch.setattr(
+            runtime_module,
+            "get_settings",
+            lambda: Settings(runtime_enabled=False, runtime_provider="IN_MEMORY"),
+        )
+
+        # With the runtime switched off the wired executor carries no sandboxed
+        # tools. What must hold in both states is that it is the sandboxing
+        # executor, so enabling the runtime cannot require a code change.
         assert set(orchestrator().tool_executor.sandboxed_tools) == set()
 
     def test_enabling_the_runtime_populates_the_sandboxed_tools(self, monkeypatch) -> None:

@@ -212,6 +212,43 @@ class TestSensitiveResourcePolicy:
         assert result.applicable is True
         assert result.decision == PermissionDecision.DENY
 
+    def test_allows_ordinary_web_query_that_mentions_token(self, sample_context):
+        policy = SensitiveResourcePolicy()
+        context = TrustContext(
+            user_id=sample_context.user_id,
+            agent_id=sample_context.agent_id,
+            agent_run_id=sample_context.agent_run_id,
+            tool_name="web.search",
+            skill_name="web",
+            risk_level=RiskLevel.LOW,
+            read_only=True,
+            side_effect=False,
+            arguments={"query": "what is a token"},
+        )
+
+        result = policy.evaluate(context)
+
+        assert result.applicable is False
+
+    def test_denies_a_credential_shaped_url_query(self, sample_context):
+        policy = SensitiveResourcePolicy()
+        context = TrustContext(
+            user_id=sample_context.user_id,
+            agent_id=sample_context.agent_id,
+            agent_run_id=sample_context.agent_run_id,
+            tool_name="web.fetch",
+            skill_name="web",
+            risk_level=RiskLevel.LOW,
+            read_only=True,
+            side_effect=False,
+            arguments={"url": "https://example.com/callback?token=abc123456789"},
+        )
+
+        result = policy.evaluate(context)
+
+        assert result.applicable is True
+        assert result.decision == PermissionDecision.DENY
+
     def test_not_applicable_safe_tool(self, sample_context):
         policy = SensitiveResourcePolicy()
         result = policy.evaluate(sample_context)

@@ -256,10 +256,13 @@ class TestSecurityInvariant:
         agent_run = AgentRun(
             agent_id=EntityId.new(),
             user_request="Create a calendar event",
+            user_id=EntityId.new(),
         )
-        
-        # Execute - should pause for approval
-        result = await orchestrator.execute(agent_run)
+
+        # Execute - should pause for approval. The acting user is required:
+        # raising a permission request has to record who is being asked, so
+        # execute() will not do it without an owner.
+        result = await orchestrator.execute(agent_run, user_id=str(agent_run.user_id))
         
         # Verify it paused for permission
         assert result.run.status == AgentRunStatus.WAITING_PERMISSION

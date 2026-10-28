@@ -1,47 +1,75 @@
+from __future__ import annotations
+
+import json
 from typing import Any
 
 from app.domain.ports.tool import ToolDefinition
 from app.domain.value_objects.risk_level import RiskLevel
 
+#: A schema larger than this is replaced by a permissive object. The model can
+#: still call the tool; the MCP server remains the authority on its arguments.
+#: Shipping an unbounded schema is a cheap way to flood the prompt.
+DEFAULT_MAX_SCHEMA_CHARS = 8_000
+
+#: Descriptions are model-visible text supplied by an external server.
+DEFAULT_MAX_DESCRIPTION_CHARS = 600
+
 
 class MCPToolMapper:
-    """Maps MCP tool definitions to NEXUS ToolDefinition."""
-    
-    def __init__(self, default_risk_level: RiskLevel = RiskLevel.MEDIUM) -> None:
+    """Maps MCP tools to NEXUS definitions without trusting their names.
+
+    The previous version inferred ``read_only`` from substrings such as "get"
+    and auto-allowed anything that looked read-like. A tool named
+    ``get_and_delete_everything`` passed that test. Tool names and descriptions
+    come from the MCP server, which is external input, so they are not an
+    authorization signal.
+
+    Everything discovered here is therefore MEDIUM risk and requires
+    confirmation. The Trust Engine still makes the decision; this only refuses
+    to let the server's own label lower it. A server-provided ``readOnlyHint``
+    is displayed for the operator but does not remove the confirmation.
+    """
+
+    def __init__(
+        self,
+        default_risk_level: RiskLevel = RiskLevel.MEDIUM,
+        *,
+        max_description_chars: int = DEFAULT_MAX_DESCRIPTION_CHARS,
+        max_schema_chars: int = DEFAULT_MAX_SCHEMA_CHARS,
+    ) -> None:
         self.default_risk_level = default_risk_level
-    
+        self.max_description_chars = max_description_chars
+        self.max_schema_chars = max_schema_chars
+
     def map_to_tool_definition(
         self,
         mcp_tool: dict[str, Any],
         server_name: str,
         server_id: str,
+        *,
+        namespaced_name: str | None = None,
     ) -> ToolDefinition:
-        """Convert an MCP tool definition to NEXUS ToolDefinition."""
-        tool_name = mcp_tool.get("name", "")
+        """Convert one MCP tool definition to a NEXUS ``ToolDefinition``."""
+        tool_name = str(mcp_tool.get("name") or "").strip()
         title = mcp_tool.get("title") or tool_name
-        description = mcp_tool.get("description", "")
-        input_schema = mcp_tool.get("input_schema", {})
-        
-        # Generate a namespaced tool name
-        namespaced_name = f"mcp.{server_name}.{tool_name}"
-        
-        # Determine risk level based on tool name
-        risk_level = self._classify_risk(tool_name)
-        
-        # Determine other security properties
-        read_only = self._is_read_only(tool_name)
-        side_effect = not read_only
-        requires_confirmation = risk_level in (RiskLevel.MEDIUM, RiskLevel.HIGH)
-        
+        description = self._description(mcp_tool.get("description"), server_name)
+        input_schema = self._schema(mcp_tool.get("input_schema"))
+        annotations = mcp_tool.get("annotations")
+        read_only_hint = (
+            isinstance(annotations, dict)
+            and bool(annotations.get("readOnlyHint"))
+        )
+
         return ToolDefinition(
-            name=namespaced_name,
+            name=namespaced_name or f"mcp.{server_name}.{tool_name}",
             description=description,
             input_schema=input_schema,
             skill_name="mcp",
-            risk_level=risk_level,
-            read_only=read_only,
-            side_effect=side_effect,
-            requires_confirmation=requires_confirmation,
+            risk_level=self.default_risk_level,
+            # Display only. It never removes the confirmation below.
+            read_only=read_only_hint,
+            side_effect=not read_only_hint,
+            requires_confirmation=True,
             category="mcp",
             version="1.0.0",
             tags=("mcp", server_name),
@@ -51,50 +79,28 @@ class MCPToolMapper:
                 "server_id": server_id,
                 "server_name": server_name,
                 "source": "mcp",
+                "annotations": annotations if isinstance(annotations, dict) else {},
             },
         )
-    
-    def _classify_risk(self, tool_name: str) -> RiskLevel:
-        """Classify the risk level of a tool based on its name."""
-        tool_name_lower = tool_name.lower()
-        
-        # High-risk patterns
-        high_risk_keywords = {
-            "delete", "drop", "destroy", "remove", "truncate", "purge",
-            "credential", "password", "secret", "token", "key", "auth",
-            "shell", "exec", "execute", "run", "system", "admin",
-            "overwrite", "reset", "format", "wipe",
-        }
-        
-        for keyword in high_risk_keywords:
-            if keyword in tool_name_lower:
-                return RiskLevel.HIGH
-        
-        # Medium-risk patterns
-        medium_risk_keywords = {
-            "create", "update", "modify", "change", "edit", "write",
-            "upload", "download", "transfer", "move", "copy",
-            "calendar", "schedule", "appointment", "event",
-        }
-        
-        for keyword in medium_risk_keywords:
-            if keyword in tool_name_lower:
-                return RiskLevel.MEDIUM
-        
-        # Default to low for read-like operations
-        if any(keyword in tool_name_lower for keyword in ["get", "list", "search", "find", "read", "fetch"]):
-            return RiskLevel.LOW
-        
-        # Default to medium for unknown
-        return self.default_risk_level
-    
-    def _is_read_only(self, tool_name: str) -> bool:
-        """Determine if a tool is read-only based on its name."""
-        tool_name_lower = tool_name.lower()
-        
-        read_only_keywords = {
-            "get", "list", "search", "find", "read", "fetch", "show",
-            "describe", "info", "status", "check", "verify",
-        }
-        
-        return any(keyword in tool_name_lower for keyword in read_only_keywords)
+
+    def _description(self, value: Any, server_name: str) -> str:
+        text = str(value or "").strip()
+        text = f"[MCP:{server_name}] {text}" if text else f"[MCP:{server_name}]"
+        if len(text) > self.max_description_chars:
+            text = text[: self.max_description_chars] + "…"
+        return text
+
+    def _schema(self, value: Any) -> dict[str, Any]:
+        if not isinstance(value, dict):
+            return {"type": "object", "additionalProperties": True}
+        try:
+            encoded = json.dumps(value, ensure_ascii=False)
+        except (TypeError, ValueError):
+            return {"type": "object", "additionalProperties": True}
+        if len(encoded) > self.max_schema_chars:
+            return {
+                "type": "object",
+                "additionalProperties": True,
+                "description": "schema omitted because it exceeded the configured limit",
+            }
+        return value

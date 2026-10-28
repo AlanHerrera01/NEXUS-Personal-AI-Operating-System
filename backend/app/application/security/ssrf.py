@@ -1,14 +1,14 @@
 """SSRF guard for any component that will fetch a caller- or model-supplied URL.
 
-NEXUS has no HTTP-fetching tool today -- the only outbound HTTP client is the
-Nebius LLM provider, whose base URL comes from deployment configuration and not
-from a request. So this module guards nothing that currently runs.
+``web.fetch`` is the caller this was written for. It calls
+``validate_resolution`` before every hop, including redirects. The only other
+outbound HTTP client is the Nebius LLM provider, whose base URL comes from
+deployment configuration and not from a request.
 
-It exists anyway, for two reasons. First, "web research" is the obvious next tool
-for a personal assistant and SSRF is the vulnerability it ships with by default.
-Second, a guard written *after* the first fetch tool exists is a guard written
-under time pressure. Having it here, tested, means the tool that lands wires to a
-control rather than inventing one.
+The guard was written before the fetch tool existed, for the reason the tool now
+demonstrates: SSRF is the vulnerability a web research tool ships with by
+default. A guard written after the first fetch tool exists is a guard written
+under time pressure.
 
 The design point that matters: **validating the URL string is not enough.** The
 classic bypass is a hostname that resolves to a private address
@@ -118,7 +118,10 @@ def validate_url(url: str, *, allow_private: bool = False) -> ValidatedTarget:
     if len(url) > 2_048:
         raise SsrfBlocked("url exceeds the maximum length")
 
-    parts = urlsplit(url.strip())
+    try:
+        parts = urlsplit(url.strip())
+    except ValueError as error:
+        raise SsrfBlocked("url is malformed") from error
 
     if parts.scheme.lower() not in ALLOWED_SCHEMES:
         # Refused rather than rewritten. "Fixing" an unknown scheme by mapping it

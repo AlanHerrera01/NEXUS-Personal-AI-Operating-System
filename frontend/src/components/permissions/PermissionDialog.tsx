@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { useI18n } from '../../hooks/useI18n';
 import type { PermissionRequest } from '../../types';
 import { permissionsApi } from '../../services/api/permissionsApi';
 
@@ -17,6 +18,7 @@ function riskTone(risk: string): string {
 }
 
 export function PermissionDialog({ request, runId, onApproved, onRejected, onClose }: PermissionDialogProps) {
+  const { t } = useI18n();
   const [isProcessing, setIsProcessing] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -28,7 +30,7 @@ export function PermissionDialog({ request, runId, onApproved, onRejected, onClo
       onApproved?.();
       onClose?.();
     } catch (err) {
-      setError('No se pudo aprobar la solicitud');
+      setError(t('shell.dialogs.permission.approveFailed'));
       console.error(err);
     } finally {
       setIsProcessing(false);
@@ -43,7 +45,7 @@ export function PermissionDialog({ request, runId, onApproved, onRejected, onClo
       onRejected?.();
       onClose?.();
     } catch (err) {
-      setError('No se pudo rechazar la solicitud');
+      setError(t('shell.dialogs.permission.rejectFailed'));
       console.error(err);
     } finally {
       setIsProcessing(false);
@@ -62,7 +64,7 @@ export function PermissionDialog({ request, runId, onApproved, onRejected, onClo
                 <span className="material-symbols-outlined text-[18px]">shield_lock</span>
               </div>
               <h2 className="font-headline-sm text-headline-sm font-semibold text-on-surface">
-                NEXUS necesita tu permiso
+                {t('shell.dialogs.permission.title')}
               </h2>
             </div>
             <button
@@ -76,17 +78,25 @@ export function PermissionDialog({ request, runId, onApproved, onRejected, onClo
 
           <div className="flex flex-col gap-space-sm">
             <div className="bg-surface-container-lowest rounded p-space-sm flex flex-col gap-0.5">
-              <span className="font-label-mono-xs text-label-mono-xs text-outline uppercase">Acción</span>
+              <span className="font-label-mono-xs text-label-mono-xs text-outline uppercase">
+                {t('shell.dialogs.permission.action')}
+              </span>
+              {/* Tool and skill names are identifiers the backend owns. */}
               <span className="font-code-base text-code-base text-secondary">{request.tool_name}</span>
             </div>
 
             <div className="flex items-center justify-between bg-surface-container-lowest rounded p-space-sm">
               <div className="flex flex-col gap-0.5">
-                <span className="font-label-mono-xs text-label-mono-xs text-outline uppercase">Skill</span>
+                <span className="font-label-mono-xs text-label-mono-xs text-outline uppercase">
+                  {t('shell.dialogs.permission.skill')}
+                </span>
                 <span className="font-body-sm text-body-sm text-on-surface">{request.skill_name}</span>
               </div>
               <div className="flex flex-col items-end gap-0.5">
-                <span className="font-label-mono-xs text-label-mono-xs text-outline uppercase">Riesgo</span>
+                <span className="font-label-mono-xs text-label-mono-xs text-outline uppercase">
+                  {t('shell.dialogs.permission.risk')}
+                </span>
+                {/* A risk code, not a label: the same text the audit trail records. */}
                 <span className={`font-label-mono-xs text-label-mono-xs border px-2 py-0.5 rounded ${riskTone(request.risk_level)}`}>
                   {request.risk_level}
                 </span>
@@ -94,7 +104,9 @@ export function PermissionDialog({ request, runId, onApproved, onRejected, onClo
             </div>
 
             <div className="bg-surface-container-lowest rounded p-space-sm flex flex-col gap-0.5">
-              <span className="font-label-mono-xs text-label-mono-xs text-outline uppercase">Motivo</span>
+              <span className="font-label-mono-xs text-label-mono-xs text-outline uppercase">
+                {t('shell.dialogs.permission.reason')}
+              </span>
               <span className="font-body-sm text-body-sm text-on-surface-variant">{request.reason}</span>
             </div>
 
@@ -111,14 +123,16 @@ export function PermissionDialog({ request, runId, onApproved, onRejected, onClo
               disabled={isDisabled}
               className="flex-1 px-space-md py-1.5 bg-surface-container hover:bg-surface-container-high border border-outline-variant/40 text-error rounded font-body-sm text-body-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
             >
-              Rechazar
+              {t('shell.dialogs.permission.reject')}
             </button>
             <button
               onClick={handleApprove}
               disabled={isDisabled}
               className="flex-1 px-space-md py-1.5 bg-primary text-on-primary hover:bg-primary-container rounded font-body-sm text-body-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
             >
-              {isProcessing ? 'Procesando…' : 'Aprobar'}
+              {isProcessing
+                ? t('shell.dialogs.permission.processing')
+                : t('shell.dialogs.permission.approve')}
             </button>
           </div>
         </div>

@@ -7,6 +7,8 @@ from app.domain.value_objects.entity_id import EntityId
 from app.domain.value_objects.memory_type import MemoryType
 from app.infrastructure.persistence.mappers.domain_mappers import memory_from_model, memory_to_model
 from app.infrastructure.persistence.models import MemoryModel
+from app.config.settings import Settings, get_settings
+from app.infrastructure.llm.embeddings import EmbeddingProvider
 
 
 class SqlAlchemyMemoryRepository(MemoryRepository):
@@ -18,15 +20,23 @@ class SqlAlchemyMemoryRepository(MemoryRepository):
     is the safer default for a security boundary.
     """
 
-    def __init__(self, session: Session) -> None:
+    def __init__(self, session: Session, settings: Settings | None = None, embedding_provider: EmbeddingProvider | None = None) -> None:
         self.session = session
+        self.settings = settings or get_settings()
+        self.embeddings = embedding_provider or (
+            EmbeddingProvider(self.settings) if self.settings.memory_search_mode == "semantic" else None
+        )
 
     def save(self, memory: Memory) -> Memory:
         if not memory.can_be_persisted:
             raise ValueError("memory marked DO_NOT_SAVE cannot be persisted")
         existing = self.session.get(MemoryModel, memory.id.value)
+        if existing is not None and (existing.user_id != (memory.user_id.value if memory.user_id else None) or existing.agent_id != memory.agent_id.value):
+            raise ValueError("cannot update another owner's or agent's memory")
+        vector = self.embeddings.embed(memory.content) if self.embeddings else None
         if existing is None:
-            self.session.add(memory_to_model(memory))
+            existing = memory_to_model(memory)
+            self.session.add(existing)
         else:
             # An update must not be able to change the owner or the agent. Both
             # are load-bearing for every subsequent read, so a caller that already
@@ -37,6 +47,9 @@ class SqlAlchemyMemoryRepository(MemoryRepository):
             existing.source = memory.source.value
             existing.importance = memory.importance.value
             existing.updated_at = memory.updated_at
+        # A keyword-mode edit must invalidate a previously generated vector.
+        existing.embedding = vector
+        existing.embedding_model = self.embeddings.fingerprint if self.embeddings else None
         self.session.commit()
         return memory_from_model(self.session.get(MemoryModel, memory.id.value))
 
@@ -89,6 +102,16 @@ class SqlAlchemyMemoryRepository(MemoryRepository):
             statement = statement.where(
                 MemoryModel.memory_type.in_([item.value for item in memory_types])
             )
+        if self.embeddings is not None and query.strip():
+            if self.session.get_bind().dialect.name != "postgresql":
+                raise ValueError("semantic memory requires PostgreSQL with pgvector")
+            vector = self.embeddings.embed(query)
+            statement = statement.where(
+                MemoryModel.embedding.is_not(None),
+                MemoryModel.embedding_model == self.embeddings.fingerprint,
+            ).order_by(MemoryModel.embedding.cosine_distance(vector), MemoryModel.created_at.desc())
+            models = self.session.scalars(statement.limit(limit)).all()
+            return [memory_from_model(model) for model in models]
         if terms:
             # Every term must appear (AND), not any term (OR). With OR, searching a
             # common word returns memories matching on that word alone -- which is

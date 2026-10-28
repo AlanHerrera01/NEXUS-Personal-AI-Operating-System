@@ -1,6 +1,8 @@
 import { useState, type FormEvent } from 'react';
 import { useAsyncData } from '../hooks/useAsyncData';
+import { useI18n } from '../hooks/useI18n';
 import { useOverview } from '../hooks/useOverview';
+import type { MessageKey } from '../i18n/types';
 import { memoryApi } from '../services/api/memoryApi';
 import { ApiError } from '../services/api/apiClient';
 import { EmptyRow, ErrorRow, LoadingRow } from '../components/ui/PageShell';
@@ -9,16 +11,18 @@ import type { MemoryDetail, MemoryImportance, MemoryType } from '../types';
 type TypeFilter = 'ALL' | MemoryType;
 
 interface TypeMeta {
-  label: string;
+  labelKey: MessageKey;
   badge: string;
   bar: string;
   count: string;
 }
 
+/* The API code stays the map key; only the label is copy, so it is stored as a
+   key and resolved at render. */
 const TYPE_META: Record<MemoryType, TypeMeta> = {
-  PREFERENCE: { label: 'PREFERENCIA', badge: 'bg-primary/10 text-primary', bar: 'bg-primary', count: 'text-primary' },
-  SEMANTIC: { label: 'SEMÁNTICA', badge: 'bg-secondary/10 text-secondary', bar: 'bg-secondary', count: 'text-secondary' },
-  EPISODIC: { label: 'EPISÓDICA', badge: 'bg-tertiary/10 text-tertiary', bar: 'bg-tertiary', count: 'text-tertiary' },
+  PREFERENCE: { labelKey: 'pages.memory.types.preference', badge: 'bg-primary/10 text-primary', bar: 'bg-primary', count: 'text-primary' },
+  SEMANTIC: { labelKey: 'pages.memory.types.semantic', badge: 'bg-secondary/10 text-secondary', bar: 'bg-secondary', count: 'text-secondary' },
+  EPISODIC: { labelKey: 'pages.memory.types.episodic', badge: 'bg-tertiary/10 text-tertiary', bar: 'bg-tertiary', count: 'text-tertiary' },
 };
 
 /** Persist the currently loaded memories as newline-delimited JSON. */
@@ -36,6 +40,7 @@ function downloadJsonl(items: MemoryDetail[], agentId: string | null) {
 }
 
 export default function Memory() {
+  const { t, formatNumber } = useI18n();
   const { data: overview, connected } = useOverview();
   const agentId = overview?.agent?.id ?? null;
 
@@ -82,7 +87,7 @@ export default function Memory() {
     try {
       setResults(await memoryApi.searchMemories(agentId, query.trim()));
     } catch (caught) {
-      setActionError(caught instanceof ApiError ? caught.message : 'La búsqueda ha fallado.');
+      setActionError(caught instanceof ApiError ? caught.message : t('pages.memory.errors.search'));
     } finally {
       setSearching(false);
     }
@@ -111,7 +116,7 @@ export default function Memory() {
       setResults(null);
       reload();
     } catch (caught) {
-      setActionError(caught instanceof ApiError ? caught.message : 'No se pudo guardar el recuerdo.');
+      setActionError(caught instanceof ApiError ? caught.message : t('pages.memory.errors.save'));
     } finally {
       setSaving(false);
     }
@@ -126,7 +131,7 @@ export default function Memory() {
       setResults((prev) => prev?.filter((item) => item.id !== memoryId) ?? null);
       reload();
     } catch (caught) {
-      setActionError(caught instanceof ApiError ? caught.message : 'No se pudo eliminar el recuerdo.');
+      setActionError(caught instanceof ApiError ? caught.message : t('pages.memory.errors.remove'));
     } finally {
       setBusy(null);
     }
@@ -134,22 +139,22 @@ export default function Memory() {
 
   const clearAll = async () => {
     if (!agentId) return;
-    if (!window.confirm('¿Eliminar todos los recuerdos de este agente? Es irreversible.')) return;
+    if (!window.confirm(t('pages.memory.confirm.clearAll'))) return;
     setActionError(null);
     try {
       await memoryApi.clearMemories(agentId);
       setResults(null);
       reload();
     } catch (caught) {
-      setActionError(caught instanceof ApiError ? caught.message : 'No se pudo limpiar la memoria.');
+      setActionError(caught instanceof ApiError ? caught.message : t('pages.memory.errors.clear'));
     }
   };
 
   const tabs: { key: TypeFilter; label: string; count: number; tone: string }[] = [
-    { key: 'ALL', label: 'Todos', count: items.length, tone: 'text-on-surface-variant' },
-    { key: 'EPISODIC', label: 'Episódica', count: counts.EPISODIC, tone: TYPE_META.EPISODIC.count },
-    { key: 'SEMANTIC', label: 'Semántica', count: counts.SEMANTIC, tone: TYPE_META.SEMANTIC.count },
-    { key: 'PREFERENCE', label: 'Preferencias', count: counts.PREFERENCE, tone: TYPE_META.PREFERENCE.count },
+    { key: 'ALL', label: t('common.all'), count: items.length, tone: 'text-on-surface-variant' },
+    { key: 'EPISODIC', label: t('pages.memory.tabs.episodic'), count: counts.EPISODIC, tone: TYPE_META.EPISODIC.count },
+    { key: 'SEMANTIC', label: t('pages.memory.tabs.semantic'), count: counts.SEMANTIC, tone: TYPE_META.SEMANTIC.count },
+    { key: 'PREFERENCE', label: t('pages.memory.tabs.preference'), count: counts.PREFERENCE, tone: TYPE_META.PREFERENCE.count },
   ];
 
   return (
@@ -163,18 +168,22 @@ export default function Memory() {
           <div className="flex flex-col xl:flex-row xl:items-center justify-between gap-space-md">
             <div className="flex flex-col gap-1">
               <div className="flex items-center gap-space-xs font-label-mono-xs text-label-mono-xs text-outline flex-wrap">
-                <span className="text-tertiary font-semibold tracking-wider uppercase">NEXUS CORE OS</span>
+                <span className="text-tertiary font-semibold tracking-wider uppercase">
+                  {t('pages.memory.header.brand')}
+                </span>
                 <span>/</span>
-                <span className="text-on-surface-variant uppercase">LONG-TERM MEMORY SUBSYSTEM</span>
+                <span className="text-on-surface-variant uppercase">
+                  {t('pages.memory.header.subsystem')}
+                </span>
                 <span>/</span>
-                <span className="text-secondary font-mono">pgvector</span>
+                <span className="text-secondary font-mono">{t('pages.memory.header.engine')}</span>
               </div>
               <div className="flex items-baseline gap-space-md flex-wrap mt-0.5">
                 <h1 className="font-headline-lg text-headline-lg text-on-surface tracking-tight font-semibold">
-                  Gestión de Memoria
+                  {t('pages.memory.header.title')}
                 </h1>
                 <span className="font-body-md text-body-md text-on-surface-variant">
-                  Inspecciona, filtra y audita los recuerdos persistentes del sistema.
+                  {t('pages.memory.header.description')}
                 </span>
               </div>
             </div>
@@ -191,35 +200,71 @@ export default function Memory() {
                 <div className="flex flex-col">
                   <div className="flex items-center gap-space-xs">
                     <span className="font-label-mono-xs text-label-mono-xs text-tertiary font-semibold tracking-wider">
-                      MEMORY FIREWALL: {connected ? 'ACTIVO' : 'SIN CONEXIÓN'}
+                      {connected
+                        ? t('pages.memory.firewall.active')
+                        : t('pages.memory.firewall.offline')}
                     </span>
                     <span className="font-label-mono-xs text-label-mono-xs bg-surface-container-high px-1.5 rounded text-outline font-mono">
-                      TRUST {overview?.trust.default_decision ?? '--'}
+                      {t('pages.memory.firewall.trust', {
+                        decision: overview?.trust.default_decision ?? '--',
+                      })}
                     </span>
                   </div>
                   <span className="font-body-sm text-body-sm text-outline">
-                    Sanitización de secretos y detección de inyección antes de persistir.
+                    {t('pages.memory.firewall.description')}
                   </span>
                 </div>
               </div>
               <span className="hidden sm:flex font-label-mono-xs text-label-mono-xs px-space-xs py-1 bg-surface-container rounded text-tertiary font-mono whitespace-nowrap">
-                {agentId ? `AGENT ${agentId.slice(0, 8)}` : 'SIN AGENTE'}
+                {agentId
+                  ? t('pages.memory.agent.label', { id: agentId.slice(0, 8) })
+                  : t('pages.memory.agent.none')}
               </span>
             </div>
           </div>
 
           {/* Metric ribbon — every node is a real value */}
           <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-space-sm mt-space-xs">
-            <MetricNode label="Recuerdos" icon="scatter_plot" tone="text-primary" value={items.length} caption="cargados (máx 100)" />
-            <MetricNode label="Episódicos" icon="history" tone="text-tertiary" value={counts.EPISODIC} caption="EPISODIC" />
-            <MetricNode label="Semánticos" icon="hub" tone="text-secondary" value={counts.SEMANTIC} caption="SEMANTIC" />
-            <MetricNode label="Preferencias" icon="tune" tone="text-primary-container" value={counts.PREFERENCE} caption="PREFERENCE" />
             <MetricNode
-              label="Motor PGVector"
+              label={t('pages.memory.metrics.memories')}
+              icon="scatter_plot"
+              tone="text-primary"
+              value={formatNumber(items.length)}
+              caption={t('pages.memory.metrics.loadedMax')}
+            />
+            <MetricNode
+              label={t('pages.memory.metrics.episodic')}
+              icon="history"
+              tone="text-tertiary"
+              value={formatNumber(counts.EPISODIC)}
+              caption="EPISODIC"
+            />
+            <MetricNode
+              label={t('pages.memory.metrics.semantic')}
+              icon="hub"
+              tone="text-secondary"
+              value={formatNumber(counts.SEMANTIC)}
+              caption="SEMANTIC"
+            />
+            <MetricNode
+              label={t('pages.memory.metrics.preference')}
+              icon="tune"
+              tone="text-primary-container"
+              value={formatNumber(counts.PREFERENCE)}
+              caption="PREFERENCE"
+            />
+            <MetricNode
+              label={t('pages.memory.metrics.vectorEngine')}
               icon="database"
               tone={connected ? 'text-tertiary' : 'text-error'}
-              value={connected ? 'Conectado' : 'Sin conexión'}
-              caption={overview?.system.database ? `DB ${overview.system.database}` : '--'}
+              value={
+                connected ? t('pages.memory.metrics.connected') : t('pages.memory.metrics.offline')
+              }
+              caption={
+                overview?.system.database
+                  ? t('pages.memory.metrics.db', { value: overview.system.database })
+                  : '--'
+              }
             />
           </div>
         </div>
@@ -238,7 +283,7 @@ export default function Memory() {
               onKeyDown={(event) => {
                 if (event.key === 'Enter') void runSearch();
               }}
-              placeholder="Buscar en memoria semántica por concepto…"
+              placeholder={t('pages.memory.search.placeholder')}
               className="w-full bg-surface-container-lowest text-on-surface font-body-sm text-body-sm pl-9 pr-14 py-2 rounded focus:outline-none focus:bg-surface-container transition-colors placeholder:text-outline"
             />
             <kbd className="absolute right-2.5 top-1/2 -translate-y-1/2 font-label-mono-xs text-label-mono-xs bg-surface-container-high px-1.5 py-0.5 rounded text-outline font-mono">
@@ -261,7 +306,7 @@ export default function Memory() {
                 >
                   <span>{tab.label}</span>
                   <span className={`bg-surface-container-high px-1.5 rounded font-mono text-[10px] ${tab.tone}`}>
-                    {tab.count}
+                    {formatNumber(tab.count)}
                   </span>
                 </button>
               ))}
@@ -273,7 +318,7 @@ export default function Memory() {
                 onClick={() => void runSearch()}
                 className="bg-primary text-on-primary hover:bg-primary-container disabled:opacity-50 px-space-sm py-1.5 rounded font-body-sm text-body-sm font-medium transition-colors"
               >
-                {searching ? 'Buscando…' : 'Buscar'}
+                {searching ? t('pages.memory.search.searching') : t('common.search')}
               </button>
               {results && (
                 <button
@@ -281,7 +326,7 @@ export default function Memory() {
                   onClick={clearSearch}
                   className="bg-surface-container-lowest hover:bg-surface-container px-space-sm py-1.5 rounded text-on-surface-variant hover:text-on-surface font-body-sm text-body-sm transition-colors"
                 >
-                  Limpiar
+                  {t('pages.memory.search.clear')}
                 </button>
               )}
               <button
@@ -290,7 +335,7 @@ export default function Memory() {
                 className="bg-surface-container-lowest hover:bg-surface-container px-space-sm py-1.5 rounded text-on-surface-variant hover:text-on-surface font-body-sm text-body-sm flex items-center gap-1 transition-colors"
               >
                 <span className="material-symbols-outlined text-[16px]">refresh</span>
-                Recargar
+                {t('common.reload')}
               </button>
               <button
                 type="button"
@@ -299,7 +344,7 @@ export default function Memory() {
                 className="bg-surface-container-lowest hover:bg-surface-container disabled:opacity-50 px-space-sm py-1.5 rounded text-secondary flex items-center gap-1 font-body-sm text-body-sm transition-colors"
               >
                 <span className="material-symbols-outlined text-[16px]">download</span>
-                Exportar
+                {t('pages.memory.actions.export')}
               </button>
               <button
                 type="button"
@@ -308,7 +353,7 @@ export default function Memory() {
                 className="bg-surface-container-lowest hover:bg-surface-container disabled:opacity-50 px-space-sm py-1.5 rounded text-primary flex items-center gap-1 font-body-sm text-body-sm transition-colors"
               >
                 <span className="material-symbols-outlined text-[16px]">add</span>
-                Nuevo
+                {t('pages.memory.actions.new')}
               </button>
             </div>
           </div>
@@ -331,13 +376,13 @@ export default function Memory() {
               className="bg-surface-container-low rounded-lg p-space-md flex flex-col gap-space-sm shadow-sm"
             >
               <span className="font-label-mono-xs text-label-mono-xs text-outline uppercase tracking-wider">
-                Registrar Recuerdo
+                {t('pages.memory.form.title')}
               </span>
               <textarea
                 value={draft.content}
                 onChange={(event) => setDraft({ ...draft, content: event.target.value })}
                 rows={2}
-                placeholder="Qué debe recordar el agente…"
+                placeholder={t('pages.memory.form.placeholder')}
                 className="bg-surface-container-lowest rounded px-space-sm py-2 font-body-sm text-body-sm text-on-surface outline-none focus:ring-1 focus:ring-primary resize-none"
               />
               <div className="flex flex-wrap items-center gap-space-sm">
@@ -366,7 +411,7 @@ export default function Memory() {
                   disabled={saving || draft.content.trim() === ''}
                   className="bg-primary text-on-primary hover:bg-primary-container disabled:opacity-50 rounded px-space-md py-1.5 font-body-sm text-body-sm font-medium transition-colors"
                 >
-                  {saving ? 'Guardando…' : 'Guardar'}
+                  {saving ? t('common.saving') : t('common.save')}
                 </button>
               </div>
             </form>
@@ -376,30 +421,35 @@ export default function Memory() {
             <div className="flex items-center gap-space-xs font-label-mono-xs text-label-mono-xs text-outline uppercase tracking-wider">
               <span className="material-symbols-outlined text-[15px] text-secondary">memory</span>
               <span>
-                {results ? 'Resultados de búsqueda' : 'Registros sincronizados'} (mostrando {visible.length} de{' '}
-                {items.length})
+                {results ? t('pages.memory.stream.results') : t('pages.memory.stream.synced')}{' '}
+                {t('pages.memory.stream.showing', {
+                  shown: formatNumber(visible.length),
+                  total: formatNumber(items.length),
+                })}
               </span>
             </div>
             <div className="flex items-center gap-space-xs font-label-mono-xs text-label-mono-xs text-tertiary">
               <span className={`w-1.5 h-1.5 rounded-full ${connected ? 'bg-tertiary' : 'bg-error'}`} />
-              <span>{connected ? 'Backend en línea' : 'Sin conexión'}</span>
+              <span>
+                {connected ? t('pages.memory.stream.online') : t('pages.memory.stream.offline')}
+              </span>
             </div>
           </div>
 
           {!agentId ? (
-            <EmptyRow message="No hay un agente activo. La memoria está scoped a un agente, así que aparece cuando exista uno." />
+            <EmptyRow message={t('pages.memory.empty.noAgent')} />
           ) : memories.loading && !results ? (
-            <LoadingRow label="Cargando recuerdos…" />
+            <LoadingRow label={t('pages.memory.empty.loading')} />
           ) : memories.error && !results ? (
             <ErrorRow message={memories.error} onRetry={reload} />
           ) : visible.length === 0 ? (
             <EmptyRow
               message={
                 results
-                  ? 'Sin coincidencias para la búsqueda.'
+                  ? t('pages.memory.empty.noResults')
                   : typeFilter === 'ALL'
-                    ? 'Este agente aún no tiene recuerdos.'
-                    : 'No hay recuerdos de este tipo.'
+                    ? t('pages.memory.empty.noMemories')
+                    : t('pages.memory.empty.noType')
               }
             />
           ) : (
@@ -416,7 +466,7 @@ export default function Memory() {
                         <span
                           className={`px-2 py-0.5 rounded font-label-mono-xs text-label-mono-xs font-medium uppercase ${meta.badge}`}
                         >
-                          {meta.label}
+                          {t(meta.labelKey)}
                         </span>
                         <span className="font-code-base text-code-base text-on-surface font-medium">
                           {memory.id.slice(0, 8)}
@@ -424,7 +474,7 @@ export default function Memory() {
                       </div>
                       <div className="flex items-center gap-space-xs">
                         <span className="px-1.5 py-0.5 rounded bg-surface-container-lowest font-label-mono-xs text-label-mono-xs text-on-surface-variant font-mono">
-                          IMPORTANCIA: {memory.importance}
+                          {t('pages.memory.card.importance', { value: memory.importance })}
                         </span>
                         <span className="px-1.5 py-0.5 rounded bg-surface-container-lowest font-label-mono-xs text-label-mono-xs text-on-surface-variant font-mono">
                           {memory.persistence_decision}
@@ -438,19 +488,23 @@ export default function Memory() {
 
                     <div className="bg-surface-container-lowest/80 rounded p-space-xs px-space-sm flex items-center justify-between text-on-surface-variant font-label-mono-xs text-label-mono-xs flex-wrap gap-space-xs">
                       <div className="flex items-center gap-2">
-                        <span className="text-outline">Origen:</span>
+                        <span className="text-outline">{t('pages.memory.card.source')}</span>
                         <span className="text-on-surface">{memory.source}</span>
                       </div>
                       <div className="flex items-center gap-1 text-tertiary">
                         <span className="material-symbols-outlined text-[14px]">lock_reset</span>
-                        <span>{memory.persistence_decision === 'SAVE' ? 'Persistido' : 'No persistido'}</span>
+                        <span>
+                          {memory.persistence_decision === 'SAVE'
+                            ? t('pages.memory.card.persisted')
+                            : t('pages.memory.card.notPersisted')}
+                        </span>
                       </div>
                     </div>
                   </div>
 
                   <div className="mt-space-md pt-space-xs flex items-center justify-between">
                     <span className="font-label-mono-xs text-label-mono-xs text-outline">
-                      AGENT {memory.agent_id.slice(0, 8)}
+                      {t('pages.memory.agent.label', { id: memory.agent_id.slice(0, 8) })}
                     </span>
                     <button
                       type="button"
@@ -459,7 +513,7 @@ export default function Memory() {
                       className="bg-surface-container hover:bg-error-container text-on-surface-variant hover:text-error disabled:opacity-50 px-space-sm py-1 rounded font-body-sm text-body-sm flex items-center gap-1 transition-colors"
                     >
                       <span className="material-symbols-outlined text-[15px]">delete</span>
-                      <span>Eliminar</span>
+                      <span>{t('common.delete')}</span>
                     </button>
                   </div>
                 </div>
@@ -474,30 +528,33 @@ export default function Memory() {
           <div className="bg-surface-container-low rounded-lg p-space-md flex flex-col gap-space-md shadow-sm">
             <div className="flex items-center gap-space-xs text-secondary font-label-mono-xs text-label-mono-xs font-semibold tracking-wider uppercase">
               <span className="material-symbols-outlined text-[16px]">shield_with_heart</span>
-              <span>POLÍTICA DE SEGURIDAD Y PRIVACIDAD</span>
+              <span>{t('pages.memory.policy.heading')}</span>
             </div>
             <div className="flex flex-col gap-space-xs">
               <h3 className="font-headline-sm text-headline-sm text-on-surface font-semibold tracking-tight leading-snug">
-                Nexus Memory Firewall
+                {t('pages.memory.policy.title')}
               </h3>
               <p className="font-body-sm text-body-sm text-on-surface-variant leading-relaxed">
-                Ninguna memoria persistente se consolida sin pasar el filtro de desinfección de
-                secretos y la heurística anti-inyección (
-                <span className="font-code-base text-code-base text-secondary">jailbreak / prompt leakage</span>
-                ) del backend. La escritura directa del operador se marca como explícita.
+                {t('pages.memory.policy.bodyBefore')}
+                <span className="font-code-base text-code-base text-secondary">
+                  {t('pages.memory.policy.heuristic')}
+                </span>
+                {t('pages.memory.policy.bodyAfter')}
               </p>
             </div>
             <div className="bg-surface-container-lowest p-space-sm rounded flex flex-col gap-space-xs">
               <div className="flex items-center justify-between text-on-surface">
                 <span className="font-label-mono-xs text-label-mono-xs font-medium">
-                  Política de decisión
+                  {t('pages.memory.policy.decision')}
                 </span>
                 <span className="font-label-mono-xs text-label-mono-xs text-tertiary font-mono">
                   {overview?.trust.default_decision ?? '--'}
                 </span>
               </div>
               <div className="flex items-center justify-between text-on-surface-variant">
-                <span className="font-label-mono-xs text-label-mono-xs">Persistencia solicitada</span>
+                <span className="font-label-mono-xs text-label-mono-xs">
+                  {t('pages.memory.policy.persistence')}
+                </span>
                 <span className="font-label-mono-xs text-label-mono-xs font-mono">
                   SAVE / DO_NOT_SAVE
                 </span>
@@ -513,15 +570,15 @@ export default function Memory() {
             </span>
             <div className="relative p-space-sm flex flex-col">
               <span className="font-label-mono-xs text-label-mono-xs text-outline uppercase font-mono">
-                Hardware Storage Layer
+                {t('pages.memory.storage.label')}
               </span>
               <span className="font-body-sm text-body-sm text-on-surface font-semibold">
-                Postgres + pgvector
+                {t('pages.memory.storage.engine')}
               </span>
               <span className="font-label-mono-xs text-label-mono-xs text-on-surface-variant">
                 {overview?.system.database === 'up'
-                  ? 'Base de datos conectada'
-                  : 'Base de datos no disponible'}
+                  ? t('pages.memory.storage.connected')
+                  : t('pages.memory.storage.unavailable')}
               </span>
             </div>
           </div>
@@ -538,7 +595,9 @@ export default function Memory() {
                 <span className="material-symbols-outlined text-[16px] text-outline group-hover:text-secondary transition-colors">
                   file_download
                 </span>
-                <span className="font-body-sm text-body-sm">Descargar recuerdos (.jsonl)</span>
+                <span className="font-body-sm text-body-sm">
+                  {t('pages.memory.operations.download')}
+                </span>
               </div>
               <span className="material-symbols-outlined text-[16px] text-outline">chevron_right</span>
             </button>
@@ -552,10 +611,12 @@ export default function Memory() {
                 <span className="material-symbols-outlined text-[16px] text-outline group-hover:text-error transition-colors">
                   delete_sweep
                 </span>
-                <span className="font-body-sm text-body-sm">Limpiar memoria del agente</span>
+                <span className="font-body-sm text-body-sm">
+                  {t('pages.memory.operations.clear')}
+                </span>
               </div>
               <span className="font-label-mono-xs text-label-mono-xs bg-surface-container px-1 rounded text-outline font-mono">
-                {items.length}
+                {formatNumber(items.length)}
               </span>
             </button>
           </div>
@@ -564,14 +625,15 @@ export default function Memory() {
           <div className="bg-surface-container-low rounded-lg p-space-md flex flex-col gap-space-sm shadow-sm">
             <div className="flex items-center justify-between">
               <span className="font-label-mono-xs text-label-mono-xs text-outline uppercase tracking-wider font-semibold">
-                Live Firewall Log
+                {t('pages.memory.log.title')}
               </span>
-              <span className="font-label-mono-xs text-label-mono-xs text-outline font-mono">NO EXPUESTO</span>
+              <span className="font-label-mono-xs text-label-mono-xs text-outline font-mono">
+                {t('common.notExposed')}
+              </span>
             </div>
             <div className="bg-surface-container-lowest p-space-sm rounded">
               <span className="font-label-mono-xs text-label-mono-xs text-outline leading-5 block">
-                El backend no expone un flujo de eventos del firewall de memoria en tiempo real.
-                Las decisiones de persistencia se ven por recuerdo en cada tarjeta.
+                {t('pages.memory.log.body')}
               </span>
             </div>
           </div>

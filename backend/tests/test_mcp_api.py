@@ -1,11 +1,14 @@
-"""MCP server registration over HTTP.
+"""MCP server registration and connection testing over HTTP.
 
-The value under test is not "does it store a row" but the two things that make
-the route safe to expose: it never connects, and it never lets the caller decide
-who owns a server or how far it is trusted.
+The value under test is not only "does it store a row" but the two things that
+make the route safe to expose: it never lets the caller decide who owns a server
+or how far it is trusted, and the test action is owner-scoped and executes
+nothing.
 """
 
 from __future__ import annotations
+
+from typing import Any
 
 from fastapi.testclient import TestClient
 
@@ -15,7 +18,11 @@ from app.domain.value_objects.entity_id import EntityId
 from app.domain.value_objects.mcp_transport_type import MCPTransportType
 from app.main import app
 from app.presentation.dependencies.identity import LOCAL_USER_ID
-from app.presentation.dependencies.mcp import mcp_registry_dependency
+from app.presentation.dependencies.mcp import (
+    mcp_registry_dependency,
+    mcp_tool_provider_dependency,
+)
+from app.presentation.schemas.mcp import ADAPTER_TRANSPORTS, REGISTRABLE_TRANSPORTS
 
 
 class FakeMCPServerRepository:
@@ -54,10 +61,29 @@ def _override(repository: FakeMCPServerRepository) -> None:
     )
 
 
+class FakeProvider:
+    def __init__(self, result: dict[str, Any]) -> None:
+        self.result = result
+        self.tested: list[str] = []
+
+    async def test_connection(self, server: MCPServer) -> dict[str, Any]:
+        self.tested.append(str(server.id))
+        return {
+            **self.result,
+            "server_id": str(server.id),
+            "server_name": server.name,
+        }
+
+
+def _override_provider(provider: FakeProvider) -> None:
+    app.dependency_overrides[mcp_tool_provider_dependency] = lambda: provider
+
+
 def teardown_function() -> None:
-    # Remove only the key this module installs; ``clear()`` would wipe the
+    # Remove only the keys this module installs; ``clear()`` would wipe the
     # module-level overrides other test files register at import time.
     app.dependency_overrides.pop(mcp_registry_dependency, None)
+    app.dependency_overrides.pop(mcp_tool_provider_dependency, None)
 
 
 STDIO = {
@@ -95,6 +121,12 @@ def test_list_is_empty_and_advertises_only_registrable_transports() -> None:
     assert body["registered"] == 0
     # ``in_process`` is not a form's business, so it is not offered.
     assert body["transports"] == ["stdio", "sse", "streamable_http"]
+
+
+def test_every_registrable_transport_has_an_adapter_branch() -> None:
+    # The form and the registry must not drift: offering a transport the
+    # adapter cannot build turns a registration into a delayed failure.
+    assert set(REGISTRABLE_TRANSPORTS) <= set(ADAPTER_TRANSPORTS)
 
 
 def test_register_stores_configuration_and_ignores_client_supplied_trust() -> None:
@@ -170,14 +202,14 @@ def test_register_requires_an_http_endpoint_for_remote_transports() -> None:
     assert response.status_code == 422
 
 
-def test_sse_registers_but_is_reported_as_not_supported() -> None:
+def test_sse_registers_and_is_reported_as_supported() -> None:
     _override(FakeMCPServerRepository())
 
     response = TestClient(app).post(
         "/api/v1/mcp-servers",
         json={
             "name": "sse-server",
-            "description": "Declared transport the adapter has no branch for.",
+            "description": "Legacy SSE transport with an adapter branch.",
             "transport_type": "sse",
             "endpoint": "https://example.invalid/sse",
             "configuration": {},
@@ -185,8 +217,9 @@ def test_sse_registers_but_is_reported_as_not_supported() -> None:
     )
 
     assert response.status_code == 201
-    # Stored honestly: registered, but not something the adapter can reach yet.
-    assert response.json()["transport_supported"] is False
+    # The adapter builds an SSE client for this row, so the API does not warn
+    # that the transport is stored but unreachable.
+    assert response.json()["transport_supported"] is True
 
 
 def test_list_only_returns_the_callers_own_servers() -> None:
@@ -264,3 +297,91 @@ def test_delete_removes_the_callers_own_server() -> None:
     assert response.status_code == 204
     assert repository.deleted == [str(server.id)]
     assert client.get("/api/v1/mcp-servers").json()["registered"] == 0
+
+
+def test_test_connection_returns_discovered_tools_for_an_owned_server() -> None:
+    repository = FakeMCPServerRepository()
+    _override(repository)
+    server = _own(repository)
+    provider = FakeProvider(
+        {
+            "ok": True,
+            "status": "READY",
+            "tools": [
+                {
+                    "name": "get_me",
+                    "title": "Get me",
+                    "description": "Return the authenticated user.",
+                    "input_schema": {"type": "object"},
+                }
+            ],
+            "tool_count": 1,
+            "error": None,
+            "connected_at": "2026-10-20T12:00:00",
+        }
+    )
+    _override_provider(provider)
+
+    response = TestClient(app).post(f"/api/v1/mcp-servers/{server.id}/test")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["ok"] is True
+    assert body["server_name"] == "filesystem"
+    assert body["tool_count"] == 1
+    assert body["tools"][0]["name"] == "get_me"
+    assert provider.tested == [str(server.id)]
+
+
+def test_test_connection_reports_a_failed_connection_without_an_http_error() -> None:
+    repository = FakeMCPServerRepository()
+    _override(repository)
+    server = _own(repository)
+    provider = FakeProvider(
+        {
+            "ok": False,
+            "status": "ERROR",
+            "tools": [],
+            "tool_count": 0,
+            "error": "MCP header references unset environment variable GITHUB_PERSONAL_ACCESS_TOKEN",
+            "connected_at": None,
+        }
+    )
+    _override_provider(provider)
+
+    response = TestClient(app).post(f"/api/v1/mcp-servers/{server.id}/test")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["ok"] is False
+    assert "GITHUB_PERSONAL_ACCESS_TOKEN" in body["error"]
+
+
+def test_test_connection_is_owner_scoped() -> None:
+    repository = FakeMCPServerRepository()
+    _override(repository)
+    foreign = MCPServer(
+        name="foreign",
+        description="Someone else's server.",
+        transport_type=MCPTransportType.STDIO,
+        endpoint="npx",
+        configuration={"command": ["npx"]},
+        owner_id=EntityId.new(),
+    )
+    repository.save(foreign)
+    provider = FakeProvider(
+        {
+            "ok": True,
+            "status": "READY",
+            "tools": [],
+            "tool_count": 0,
+            "error": None,
+            "connected_at": None,
+        }
+    )
+    _override_provider(provider)
+
+    response = TestClient(app).post(f"/api/v1/mcp-servers/{foreign.id}/test")
+
+    assert response.status_code == 404
+    assert provider.tested == []

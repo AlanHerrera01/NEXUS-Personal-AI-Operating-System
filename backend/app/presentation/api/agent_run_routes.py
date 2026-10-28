@@ -1,6 +1,6 @@
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Response, status
 from sqlalchemy.orm import Session
 
 from app.application.agent_runs.create_agent_run import CreateAgentRunUseCase
@@ -13,7 +13,7 @@ from app.domain.value_objects.execution_authorization import AuthorizationError
 from app.presentation.dependencies.agent import orchestrator_dependency
 from app.presentation.dependencies.identity import current_user_id
 from app.presentation.dependencies.persistence import session_dependency
-from app.presentation.schemas.agent_runs import AgentActionResponse, AgentRunResponse, CreateAgentRunRequest, ResumeAgentRunRequest
+from app.presentation.schemas.agent_runs import AgentActionResponse, AgentRunResponse, AnswerAgentRunRequest, CreateAgentRunRequest, ResumeAgentRunRequest
 
 router = APIRouter(prefix="/api/v1/agents", tags=["agent-runs"])
 
@@ -30,8 +30,9 @@ async def run_agent(
         SqlAlchemyAgentRepository(session),
         SqlAlchemyAgentRunRepository(session),
     )
+    conversation_id = EntityId(payload.conversation_id) if payload.conversation_id else None
     try:
-        run = use_case.execute(EntityId(agent_id), payload.input, user_id)
+        run = use_case.execute(EntityId(agent_id), payload.input, user_id, conversation_id)
     except ValueError as error:
         raise HTTPException(status_code=404, detail=str(error)) from error
     # The owner is resolved from the server-side identity, never from the payload.
@@ -41,8 +42,10 @@ async def run_agent(
     return AgentRunResponse(
         run_id=str(result.run.id),
         status=result.run.status.value,
+        user_request=result.run.user_request,
         response=result.response,
         question=result.question,
+        conversation_id=str(result.run.conversation_id) if result.run.conversation_id else None,
         actions=[
             AgentActionResponse(
                 tool_name=action.action_name,
@@ -69,6 +72,9 @@ def get_agent_run(
     return AgentRunResponse(
         run_id=str(run.id),
         status=run.status.value,
+        user_request=run.user_request,
+        response=run.response,
+        question=run.question,
         actions=[
             AgentActionResponse(
                 tool_name=action.action_name,
@@ -76,6 +82,63 @@ def get_agent_run(
                 arguments=action.arguments,
             )
             for action in SqlAlchemyAgentActionRepository(session).list_by_run(run.id)
+        ],
+    )
+
+
+@router.delete("/runs/{run_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_agent_run(
+    run_id: UUID,
+    session: Session = Depends(session_dependency),
+    user_id: EntityId = Depends(current_user_id),
+) -> Response:
+    # Owner-scoped, like the reads: the run id arrives from the URL, so an
+    # unscoped delete would let any caller erase another user's history. A run
+    # the caller does not own is reported as absent rather than forbidden, so
+    # the endpoint does not confirm that an id exists.
+    deleted = SqlAlchemyAgentRunRepository(session).delete(EntityId(run_id), user_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Agent run not found")
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.post("/runs/{run_id}/answer", response_model=AgentRunResponse)
+async def answer_agent_run(
+    run_id: UUID,
+    payload: AnswerAgentRunRequest,
+    session: Session = Depends(session_dependency),
+    orchestrator: AgentOrchestrator = Depends(orchestrator_dependency),
+    user_id: EntityId = Depends(current_user_id),
+) -> AgentRunResponse:
+    """Answer the question a run stopped on.
+
+    Distinct from resume: resume answers an authorization, this supplies the
+    detail the agent asked for. The run is loaded under the acting identity
+    first, the same as resume, so a run that is not the caller's is never
+    touched and never read.
+    """
+    run = SqlAlchemyAgentRunRepository(session).get_by_id(EntityId(run_id), user_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="Agent run not found")
+    try:
+        result = await orchestrator.answer(run, payload.answer, user_id=str(user_id))
+    except ValueError as error:
+        # The run is not waiting on a question, or it is waiting on a permission
+        # decision instead: a conflict with the run's state, not a bad body.
+        raise HTTPException(status_code=409, detail=str(error)) from error
+    return AgentRunResponse(
+        run_id=str(result.run.id),
+        status=result.run.status.value,
+        user_request=result.run.user_request,
+        response=result.response,
+        question=result.question,
+        actions=[
+            AgentActionResponse(
+                tool_name=action.action_name,
+                status=action.status.value,
+                arguments=action.arguments,
+            )
+            for action in SqlAlchemyAgentActionRepository(session).list_by_run(result.run.id)
         ],
     )
 
@@ -108,7 +171,9 @@ async def resume_agent_run(
     return AgentRunResponse(
         run_id=str(result.run.id),
         status=result.run.status.value,
+        user_request=result.run.user_request,
         response=result.response,
+        question=result.question,
         actions=[
             AgentActionResponse(
                 tool_name=action.action_name,

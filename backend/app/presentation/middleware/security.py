@@ -2,11 +2,10 @@
 
 Two things this deliberately does *not* do.
 
-**It does not authenticate.** There is no auth in NEXUS, so identity comes from
-:mod:`app.presentation.dependencies.identity`. Rate limiting is keyed by that
-single local principal, which means it bounds accidental or runaway volume, not
-hostile traffic from a second party -- there is no second party to tell apart.
-The limits are real, but calling them abuse prevention would overstate them.
+**It does not authenticate.** The global application dependency in
+:mod:`app.presentation.dependencies.identity` verifies the bearer access key.
+Rate limiting uses the stable single-operator principal and is process-local;
+it does not replace authentication or upstream traffic limits.
 
 **It does not inspect request bodies.** The body limit is enforced from
 ``Content-Length`` and by counting bytes as the stream is consumed downstream,

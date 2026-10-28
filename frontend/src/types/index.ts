@@ -177,6 +177,26 @@ export interface MCPServer {
   metadata: Record<string, unknown>;
 }
 
+/** One tool reported by an MCP server during a connection test. */
+export interface MCPToolView {
+  name: string;
+  title: string | null;
+  description: string | null;
+  input_schema: Record<string, unknown>;
+}
+
+/** Result of a real connection attempt, including the reason when it fails. */
+export interface MCPConnectionTest {
+  ok: boolean;
+  server_id: string;
+  server_name: string;
+  status: MCPServerStatus;
+  tools: MCPToolView[];
+  tool_count: number;
+  error: string | null;
+  connected_at: string | null;
+}
+
 // Runtime Session
 export type RuntimeStatus = 
   | 'CREATED'
@@ -349,6 +369,8 @@ export interface OverviewRun {
 export interface OverviewRuns {
   active_count: number;
   items: OverviewRun[];
+  /** Every recent run the owner has, finished or not; drives the runs sidebar. */
+  recent: OverviewRun[];
 }
 
 export interface OverviewAuthorization {
@@ -437,8 +459,12 @@ export interface AgentActionResponse {
 export interface AgentRunResponse {
   run_id: string;
   status: string;
+  /** The request the run answers; carried on the read so a reopened run can show its own thread. */
+  user_request?: string | null;
   response?: string | null;
   question?: string | null;
+  /** When the run started, so a reopened conversation shows when each exchange happened. */
+  created_at?: string | null;
   actions: AgentActionResponse[];
 }
 
@@ -583,4 +609,23 @@ export interface ActivityFeed {
   events: ActivityEvent[];
   summary: ActivitySummary;
   audit: ActivityAuditTrail;
+}
+
+// GET /api/v1/calendar/events
+/**
+ * One event on the owner's calendar, as stored.
+ *
+ * `start_at`/`end_at` are ISO-8601 in UTC because that is how the backend
+ * normalises every instant. Formatting them in the viewer's zone is what this
+ * side is for, so the offset on screen is the reader's own.
+ */
+export interface CalendarEvent {
+  id: string;
+  title: string;
+  description: string;
+  location: string | null;
+  start_at: string;
+  end_at: string;
+  agent_id: string | null;
+  created_at: string;
 }

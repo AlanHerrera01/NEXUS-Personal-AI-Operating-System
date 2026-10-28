@@ -1,13 +1,11 @@
 services:
   postgres:
-    image: postgres:17-alpine
+    image: pgvector/pgvector:pg17
     restart: unless-stopped
     environment:
       POSTGRES_USER: nexus
-      POSTGRES_PASSWORD: nexus
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Run python scripts/setup_local.py first}
       POSTGRES_DB: nexus
-    ports:
-      - "5432:5432"
     volumes:
       - nexus_postgres_data:/var/lib/postgresql/data
     healthcheck:
@@ -31,7 +29,8 @@ services:
     environment:
       # Overrides the localhost value in backend/.env: inside the Compose network
       # Postgres answers to the service name, not to the host loopback.
-      DATABASE_URL: postgresql+psycopg://nexus:nexus@postgres:5432/nexus
+      DATABASE_URL: postgresql+psycopg://nexus:${POSTGRES_PASSWORD:?Missing POSTGRES_PASSWORD}@postgres:5432/nexus
+      AUTH_TOKEN_HASH: ${AUTH_TOKEN_HASH:?Run python scripts/setup_local.py first}
       ENVIRONMENT: production
       LOG_LEVEL: INFO
       APP_NAME: NEXUS API
@@ -40,11 +39,32 @@ services:
       # would be blocked by CORS. :5173 stays listed for a local dev server
       # talking to the containerised backend.
       CORS_ALLOWED_ORIGINS: http://localhost:3000,http://127.0.0.1:3000,http://localhost:5173,http://127.0.0.1:5173
+      # Files live in ./workspace on the host and are mounted read-only. The
+      # tools resolve every path under this root and refuse credential-like
+      # names even when they are inside it.
+      FILES_WORKSPACE_ROOT: /workspace
+      # The repository is mounted read-only at /repo (outside /workspace, which
+      # is itself read-only: Docker cannot create a nested mountpoint beneath a
+      # read-only parent). git.diff only runs diff/rev-parse.
+      GIT_REPO_PATH: /repo
+      # Git timeout. Bind mounts on Docker Desktop (Windows/macOS) are much
+      # slower than a Linux volume, so the Compose default is more generous than
+      # the application default. Lower it on a native Linux host if desired.
+      GIT_TIMEOUT_SECONDS: 120
+      # No Engine socket or root group. docker.logs reports unavailable.
+      DOCKER_SOCKET_PATH: /nonexistent/docker.sock
+    volumes:
+      - ./workspace:/workspace:ro
+      - .:/repo:ro
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
     depends_on:
       postgres:
         condition: service_healthy
-    ports:
-      - "8000:8000"
+    expose:
+      - "8000"
     command: >
       sh -c "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000"
 
@@ -56,7 +76,7 @@ services:
     depends_on:
       - backend
     ports:
-      - "3000:80"
+      - "${NEXUS_BIND_ADDRESS:-127.0.0.1}:3000:80"
 
 volumes:
   nexus_postgres_data:

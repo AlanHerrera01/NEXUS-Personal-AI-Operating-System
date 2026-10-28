@@ -12,6 +12,7 @@ class AgentRunModel(Base):
     __table_args__ = (
         Index("ix_agent_runs_agent_id", "agent_id"),
         Index("ix_agent_runs_user_status", "user_id", "status"),
+        Index("ix_agent_runs_conversation_id", "conversation_id"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
@@ -20,11 +21,18 @@ class AgentRunModel(Base):
     # is this" has to be answerable without walking back to the agent -- an agent
     # can be shared, a run cannot.
     user_id: Mapped[uuid.UUID | None] = mapped_column(nullable=True, default=None, index=True)
+    # Optional conversation that groups related runs together
+    conversation_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("conversations.id", ondelete="SET NULL"), nullable=True, default=None, index=True)
     user_request: Mapped[str] = mapped_column(Text, nullable=False)
     status: Mapped[str] = mapped_column(String(40), nullable=False, default="CREATED")
+    # The agent's closing message and the question it parked on. Nullable: a run
+    # that is still moving has said neither yet.
+    response: Mapped[str | None] = mapped_column(Text, nullable=True, default=None)
+    question: Mapped[str | None] = mapped_column(Text, nullable=True, default=None)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
 
     agent = relationship("AgentModel", back_populates="runs")
+    conversation = relationship("ConversationModel", backref="runs")
     plans = relationship("ExecutionPlanModel", back_populates="agent_run", cascade="all, delete-orphan")
     actions = relationship("AgentActionModel", back_populates="agent_run", cascade="all, delete-orphan")

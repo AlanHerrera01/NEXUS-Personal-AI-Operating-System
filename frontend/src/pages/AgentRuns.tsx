@@ -1,45 +1,55 @@
 import { useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useAsyncData } from '../hooks/useAsyncData';
+import { useI18n } from '../hooks/useI18n';
 import { useOverview } from '../hooks/useOverview';
 import { agentApi } from '../services/api/agentApi';
 import { permissionsApi } from '../services/api/permissionsApi';
 import { healthApi } from '../services/api/healthApi';
 import { ApiError } from '../services/api/apiClient';
 import { EmptyRow, ErrorRow, LoadingRow } from '../components/ui/PageShell';
+import type { MessageKey } from '../i18n/types';
 import type { AgentRunResponse, OverviewRun, PermissionRequest } from '../types';
 
 const ACTIVE = new Set(['CREATED', 'CONTEXT_LOADING', 'PLANNING', 'EXECUTING', 'OBSERVING']);
 
-function runStatusMeta(status: string): { label: string; tone: string; dot: string; pulse: boolean } {
-  if (status === 'COMPLETED') return { label: 'COMPLETED', tone: 'text-tertiary', dot: 'bg-tertiary', pulse: false };
-  if (status === 'WAITING_PERMISSION') return { label: 'EN ESPERA AUTH', tone: 'text-primary', dot: 'bg-primary', pulse: true };
+/* A run's status chip shows the backend's own code in almost every case; only
+   the phrase that replaces one of them is copy, so the codes travel through
+   untouched and this helper carries a key only when there is one to render. */
+function runStatusMeta(status: string): {
+  labelKey?: MessageKey;
+  tone: string;
+  dot: string;
+  pulse: boolean;
+} {
+  if (status === 'COMPLETED') return { tone: 'text-tertiary', dot: 'bg-tertiary', pulse: false };
+  if (status === 'WAITING_PERMISSION')
+    return {
+      labelKey: 'pages.runs.statuses.waitingAuthorization',
+      tone: 'text-primary',
+      dot: 'bg-primary',
+      pulse: true,
+    };
   if (status === 'FAILED' || status === 'BLOCKED' || status === 'CANCELLED')
-    return { label: status, tone: 'text-error', dot: 'bg-error', pulse: false };
-  return { label: status, tone: 'text-secondary', dot: 'bg-secondary', pulse: ACTIVE.has(status) };
+    return { tone: 'text-error', dot: 'bg-error', pulse: false };
+  return { tone: 'text-secondary', dot: 'bg-secondary', pulse: ACTIVE.has(status) };
 }
 
-function stepMeta(status: string): { label: string; icon: string; chip: string; spin: boolean } {
+function stepMeta(status: string): { labelKey: MessageKey; icon: string; chip: string; spin: boolean } {
   switch (status) {
     case 'COMPLETED':
-      return { label: 'COMPLETADO', icon: 'check_circle', chip: 'bg-tertiary/10 text-tertiary', spin: false };
+      return { labelKey: 'pages.runs.stepStatus.completed', icon: 'check_circle', chip: 'bg-tertiary/10 text-tertiary', spin: false };
     case 'EXECUTING':
-      return { label: 'PROCESANDO', icon: 'sync', chip: 'bg-secondary/10 text-secondary', spin: true };
+      return { labelKey: 'pages.runs.stepStatus.executing', icon: 'sync', chip: 'bg-secondary/10 text-secondary', spin: true };
     case 'APPROVED':
-      return { label: 'APROBADO', icon: 'thumb_up', chip: 'bg-secondary/10 text-secondary', spin: false };
+      return { labelKey: 'pages.runs.stepStatus.approved', icon: 'thumb_up', chip: 'bg-secondary/10 text-secondary', spin: false };
     case 'FAILED':
-      return { label: 'FALLIDO', icon: 'error', chip: 'bg-error/15 text-error', spin: false };
+      return { labelKey: 'pages.runs.stepStatus.failed', icon: 'error', chip: 'bg-error/15 text-error', spin: false };
     case 'BLOCKED':
-      return { label: 'BLOQUEADO', icon: 'shield_lock', chip: 'bg-error/15 text-error', spin: false };
+      return { labelKey: 'pages.runs.stepStatus.blocked', icon: 'shield_lock', chip: 'bg-error/15 text-error', spin: false };
     default:
-      return { label: 'PENDIENTE', icon: 'hourglass_empty', chip: 'bg-surface-container text-outline', spin: false };
+      return { labelKey: 'pages.runs.stepStatus.pending', icon: 'hourglass_empty', chip: 'bg-surface-container text-outline', spin: false };
   }
-}
-
-function formatMoment(iso: string | undefined): string {
-  if (!iso) return '--';
-  const date = new Date(iso);
-  return Number.isNaN(date.getTime()) ? '--' : date.toLocaleString();
 }
 
 export default function AgentRuns() {
@@ -49,6 +59,7 @@ export default function AgentRuns() {
 
 function RunsWorkspace({ routeRunId }: { routeRunId: string | null }) {
   const navigate = useNavigate();
+  const { t, formatDateTime } = useI18n();
   const { data: overview, loading } = useOverview();
   const runtime = useAsyncData(() => healthApi.runtime(), []);
 
@@ -80,12 +91,12 @@ function RunsWorkspace({ routeRunId }: { routeRunId: string | null }) {
   });
 
   const filters = [
-    { key: 'ALL', label: 'Todas', count: runs.length, dot: null as string | null },
-    { key: 'ACTIVE', label: 'En curso', count: counts.active, dot: 'bg-secondary' },
-    { key: 'COMPLETED', label: 'Completadas', count: counts.completed, dot: 'bg-tertiary' },
-    { key: 'WAITING', label: 'En espera auth', count: counts.waiting, dot: 'bg-primary' },
-    { key: 'FAILED', label: 'Fallidas', count: counts.failed, dot: 'bg-error' },
-  ];
+    { key: 'ALL', labelKey: 'pages.runs.filters.all', count: runs.length, dot: null as string | null },
+    { key: 'ACTIVE', labelKey: 'pages.runs.filters.active', count: counts.active, dot: 'bg-secondary' },
+    { key: 'COMPLETED', labelKey: 'pages.runs.filters.completed', count: counts.completed, dot: 'bg-tertiary' },
+    { key: 'WAITING', labelKey: 'pages.runs.filters.waiting', count: counts.waiting, dot: 'bg-primary' },
+    { key: 'FAILED', labelKey: 'pages.runs.filters.failed', count: counts.failed, dot: 'bg-error' },
+  ] as const;
 
   const createRun = async () => {
     const agentId = overview?.agent?.id;
@@ -98,7 +109,9 @@ function RunsWorkspace({ routeRunId }: { routeRunId: string | null }) {
       setShowNew(false);
       navigate(`/runs/${run.run_id}`);
     } catch (caught) {
-      setCreateError(caught instanceof ApiError ? caught.message : 'No se pudo iniciar la tarea.');
+      setCreateError(
+        caught instanceof ApiError ? caught.message : t('pages.runs.newTask.failed'),
+      );
     } finally {
       setCreating(false);
     }
@@ -111,20 +124,20 @@ function RunsWorkspace({ routeRunId }: { routeRunId: string | null }) {
         <div className="flex flex-col gap-space-xs">
           <div className="flex items-center gap-space-xs">
             <span className="font-label-mono-xs text-label-mono-xs tracking-widest text-primary uppercase">
-              ORCHESTRATION LAYER
+              {t('pages.runs.header.eyebrow')}
             </span>
             <span className="text-outline text-body-sm font-code-base">/</span>
             <span className="font-label-mono-xs text-label-mono-xs text-outline tracking-wider uppercase">
-              TRACE-STREAM
+              {t('pages.runs.header.traceStream')}
             </span>
           </div>
           <h1 className="font-headline-lg text-headline-lg text-on-surface tracking-tight">
-            Historial de Ejecuciones (Agent Runs)
+            {t('pages.runs.header.title')}
           </h1>
           <p className="font-body-md text-body-md text-on-surface-variant max-w-3xl">
-            Trazabilidad y supervisión de las ejecuciones del agente. El backend expone las
-            ejecuciones activas vía <span className="font-code-base text-secondary">/api/v1/overview</span> y
-            cada detalle por su ID.
+            {t('pages.runs.header.descriptionBefore')}
+            <span className="font-code-base text-secondary">/api/v1/overview</span>
+            {t('pages.runs.header.descriptionAfter')}
           </p>
         </div>
         <div className="flex items-center gap-space-sm self-start xl:self-auto">
@@ -134,7 +147,7 @@ function RunsWorkspace({ routeRunId }: { routeRunId: string | null }) {
             className="px-space-md py-2 rounded-lg bg-surface-container-high hover:bg-surface-bright text-on-surface text-body-sm font-body-sm flex items-center gap-1.5 transition-colors"
           >
             <span className="material-symbols-outlined text-[16px] text-on-surface-variant">tune</span>
-            <span>Recargar</span>
+            <span>{t('common.reload')}</span>
           </button>
           <button
             type="button"
@@ -143,7 +156,7 @@ function RunsWorkspace({ routeRunId }: { routeRunId: string | null }) {
             className="px-space-md py-2 rounded-lg bg-primary hover:bg-primary-container disabled:opacity-50 text-on-primary text-body-sm font-semibold flex items-center gap-1.5 transition-colors shadow-sm"
           >
             <span className="material-symbols-outlined text-[18px]">add</span>
-            <span>Iniciar Nueva Tarea</span>
+            <span>{t('pages.runs.header.newTask')}</span>
           </button>
         </div>
       </div>
@@ -158,10 +171,10 @@ function RunsWorkspace({ routeRunId }: { routeRunId: string | null }) {
             value={query}
             onChange={(event) => setQuery(event.target.value)}
             className="bg-transparent border-none outline-none font-body-sm text-body-sm text-on-surface placeholder:text-outline w-full"
-            placeholder="Buscar ejecuciones por ID o solicitud…"
+            placeholder={t('pages.runs.search.placeholder')}
           />
           <span className="font-label-mono-xs text-label-mono-xs px-1.5 py-0.5 rounded bg-surface-container text-outline">
-            FILTER
+            {t('pages.runs.search.filterBadge')}
           </span>
         </div>
         <div className="flex items-center overflow-x-auto gap-1 py-0.5">
@@ -177,7 +190,7 @@ function RunsWorkspace({ routeRunId }: { routeRunId: string | null }) {
               }`}
             >
               {filter.dot && <span className={`w-1.5 h-1.5 rounded-full ${filter.dot}`} />}
-              <span>{filter.label}</span>
+              <span>{t(filter.labelKey)}</span>
               <span className="px-1 rounded bg-surface-container-high text-on-surface-variant">{filter.count}</span>
             </button>
           ))}
@@ -189,22 +202,22 @@ function RunsWorkspace({ routeRunId }: { routeRunId: string | null }) {
         <div className="xl:col-span-5 flex flex-col gap-space-sm">
           <div className="flex items-center justify-between px-space-xs">
             <div className="flex items-center gap-space-xs font-label-mono-xs text-label-mono-xs text-outline uppercase tracking-wider">
-              <span>COLA DE EJECUCIÓN</span>
+              <span>{t('pages.runs.queue.heading')}</span>
               <span>·</span>
-              <span>{runs.length} ACTIVAS</span>
+              <span>{t('pages.runs.queue.activeCount', { count: runs.length })}</span>
             </div>
             <div className="flex items-center gap-1 text-on-surface-variant font-label-mono-xs text-label-mono-xs">
               <span className="material-symbols-outlined text-[14px]">refresh</span>
-              <span>Auto-sync 10s</span>
+              <span>{t('pages.runs.queue.autoSync')}</span>
             </div>
           </div>
 
           {loading ? (
-            <LoadingRow label="Cargando ejecuciones…" />
+            <LoadingRow label={t('pages.runs.queue.loading')} />
           ) : runs.length === 0 ? (
-            <EmptyRow message="No hay ejecuciones activas. El backend no expone un historial completo, solo las ejecuciones en curso." />
+            <EmptyRow message={t('pages.runs.queue.empty')} />
           ) : visible.length === 0 ? (
-            <EmptyRow message="Ninguna ejecución coincide con el filtro." />
+            <EmptyRow message={t('pages.runs.queue.noMatch')} />
           ) : (
             visible.map((run: OverviewRun) => {
               const meta = runStatusMeta(run.status);
@@ -229,15 +242,15 @@ function RunsWorkspace({ routeRunId }: { routeRunId: string | null }) {
                     </div>
                     <div className={`flex items-center gap-1.5 px-2 py-0.5 rounded bg-surface-container-lowest font-label-mono-xs text-label-mono-xs ${meta.tone}`}>
                       <span className={`w-1.5 h-1.5 rounded-full ${meta.dot} ${meta.pulse ? 'animate-pulse' : ''}`} />
-                      <span>{meta.label}</span>
+                      <span>{meta.labelKey ? t(meta.labelKey) : run.status}</span>
                     </div>
                   </div>
                   <h3 className="font-body-lg text-body-lg font-medium text-on-surface line-clamp-2">
                     {run.user_request}
                   </h3>
                   <div className="flex items-center justify-between text-outline font-label-mono-xs text-label-mono-xs pt-0.5">
-                    <span>Creada: {formatMoment(run.created_at)}</span>
-                    <span>Act.: {formatMoment(run.updated_at)}</span>
+                    <span>{t('pages.runs.queue.created', { value: formatDateTime(run.created_at) })}</span>
+                    <span>{t('pages.runs.queue.updated', { value: formatDateTime(run.updated_at) })}</span>
                   </div>
                 </button>
               );
@@ -256,7 +269,7 @@ function RunsWorkspace({ routeRunId }: { routeRunId: string | null }) {
               sandboxProvider={runtime.data?.provider ?? '--'}
             />
           ) : (
-            <EmptyRow message="Selecciona una ejecución para ver su plan y su traza." />
+            <EmptyRow message={t('pages.runs.detail.selectPrompt')} />
           )}
         </div>
       </div>
@@ -278,10 +291,10 @@ function RunsWorkspace({ routeRunId }: { routeRunId: string | null }) {
                 </div>
                 <div>
                   <h2 className="font-headline-sm text-headline-sm text-on-surface font-semibold">
-                    Iniciar Nueva Tarea
+                    {t('pages.runs.newTask.title')}
                   </h2>
                   <p className="font-body-sm text-body-sm text-on-surface-variant">
-                    Se ejecutará sobre el agente activo vía el orquestador y el Trust Engine.
+                    {t('pages.runs.newTask.description')}
                   </p>
                 </div>
               </div>
@@ -298,7 +311,7 @@ function RunsWorkspace({ routeRunId }: { routeRunId: string | null }) {
               value={draft}
               onChange={(event) => setDraft(event.target.value)}
               rows={3}
-              placeholder="Describe la tarea para el agente…"
+              placeholder={t('pages.runs.newTask.placeholder')}
               className="w-full bg-surface-container-lowest px-space-md py-2.5 rounded-lg text-on-surface font-body-md text-body-md placeholder:text-outline outline-none focus:ring-1 focus:ring-primary/60 resize-none"
             />
 
@@ -308,7 +321,7 @@ function RunsWorkspace({ routeRunId }: { routeRunId: string | null }) {
                 onClick={() => setShowNew(false)}
                 className="px-4 py-2 rounded-lg text-on-surface-variant hover:bg-surface-container font-body-sm text-body-sm transition-colors"
               >
-                Cancelar
+                {t('common.cancel')}
               </button>
               <button
                 type="button"
@@ -316,7 +329,7 @@ function RunsWorkspace({ routeRunId }: { routeRunId: string | null }) {
                 onClick={() => void createRun()}
                 className="px-4 py-2 rounded-lg bg-primary-container text-on-primary font-body-sm text-body-sm font-semibold hover:bg-primary disabled:opacity-50 transition-all"
               >
-                {creating ? 'Ejecutando…' : 'Ejecutar Tarea'}
+                {creating ? t('pages.runs.newTask.submitting') : t('pages.runs.newTask.submit')}
               </button>
             </div>
           </div>
@@ -334,6 +347,7 @@ interface RunDetailProps {
 }
 
 function RunDetail({ runId, run, modelLabel, sandboxProvider }: RunDetailProps) {
+  const { t, formatDateTime } = useI18n();
   const detail = useAsyncData(() => agentApi.getRun(runId), [runId]);
   const requests = useAsyncData(() => permissionsApi.getPermissionRequests(runId), [runId]);
 
@@ -342,7 +356,8 @@ function RunDetail({ runId, run, modelLabel, sandboxProvider }: RunDetailProps) 
   const { refresh } = useOverview();
 
   const data: AgentRunResponse | null = detail.data ?? null;
-  const meta = runStatusMeta(data?.status ?? run?.status ?? 'CREATED');
+  const status = data?.status ?? run?.status ?? 'CREATED';
+  const meta = runStatusMeta(status);
   const actions = data?.actions ?? [];
   const completed = actions.filter((action) => action.status === 'COMPLETED').length;
   const progress = actions.length > 0 ? Math.round((completed / actions.length) * 100) : 0;
@@ -359,7 +374,7 @@ function RunDetail({ runId, run, modelLabel, sandboxProvider }: RunDetailProps) 
       requests.reload();
       refresh();
     } catch (caught) {
-      setActionError(caught instanceof ApiError ? caught.message : 'La decisión ha fallado.');
+      setActionError(caught instanceof ApiError ? caught.message : t('pages.runs.detail.decisionFailed'));
     } finally {
       setBusy(null);
     }
@@ -377,14 +392,14 @@ function RunDetail({ runId, run, modelLabel, sandboxProvider }: RunDetailProps) 
               <span className="text-outline">·</span>
               <div className={`flex items-center gap-1.5 px-2 py-0.5 rounded bg-surface-container-high font-label-mono-xs text-label-mono-xs ${meta.tone}`}>
                 <span className={`w-1.5 h-1.5 rounded-full ${meta.dot} ${meta.pulse ? 'animate-pulse' : ''}`} />
-                <span>{meta.label}</span>
+                <span>{meta.labelKey ? t(meta.labelKey) : status}</span>
               </div>
               <span className="px-2 py-0.5 rounded bg-surface-container font-label-mono-xs text-label-mono-xs text-on-surface-variant">
                 {sandboxProvider}
               </span>
             </div>
             <h2 className="font-headline-sm text-headline-sm text-on-surface font-semibold tracking-tight line-clamp-2">
-              {run?.user_request ?? 'Ejecución del agente'}
+              {run?.user_request ?? t('pages.runs.detail.untitled')}
             </h2>
           </div>
           <button
@@ -396,7 +411,7 @@ function RunDetail({ runId, run, modelLabel, sandboxProvider }: RunDetailProps) 
             className="px-2.5 py-1.5 rounded bg-surface-container hover:bg-surface-container-high text-on-surface-variant text-body-sm font-body-sm flex items-center gap-1 transition-colors self-start md:self-auto"
           >
             <span className="material-symbols-outlined text-[16px]">refresh</span>
-            <span>Actualizar</span>
+            <span>{t('common.refresh')}</span>
           </button>
         </div>
 
@@ -404,25 +419,25 @@ function RunDetail({ runId, run, modelLabel, sandboxProvider }: RunDetailProps) 
 
         <div className="grid grid-cols-2 md:grid-cols-4 gap-space-xs bg-surface-container-low p-space-sm rounded-lg">
           <div className="flex flex-col p-space-xs">
-            <span className="font-label-mono-xs text-label-mono-xs text-outline uppercase">Estado</span>
+            <span className="font-label-mono-xs text-label-mono-xs text-outline uppercase">{t('common.status')}</span>
             <span className={`font-code-base text-code-base font-semibold mt-0.5 ${meta.tone}`}>
               {data?.status ?? run?.status ?? '--'}
             </span>
           </div>
           <div className="flex flex-col p-space-xs">
-            <span className="font-label-mono-xs text-label-mono-xs text-outline uppercase">Acciones</span>
+            <span className="font-label-mono-xs text-label-mono-xs text-outline uppercase">{t('common.actions')}</span>
             <span className="font-code-base text-code-base font-semibold text-on-surface mt-0.5">
               {completed}/{actions.length}
             </span>
           </div>
           <div className="flex flex-col p-space-xs">
-            <span className="font-label-mono-xs text-label-mono-xs text-outline uppercase">Runtime Inferencia</span>
+            <span className="font-label-mono-xs text-label-mono-xs text-outline uppercase">{t('pages.runs.detail.inferenceRuntime')}</span>
             <span className="font-label-mono-xs text-label-mono-xs text-secondary mt-1 truncate">{modelLabel}</span>
           </div>
           <div className="flex flex-col p-space-xs">
-            <span className="font-label-mono-xs text-label-mono-xs text-outline uppercase">Creada</span>
+            <span className="font-label-mono-xs text-label-mono-xs text-outline uppercase">{t('pages.runs.detail.created')}</span>
             <span className="font-label-mono-xs text-label-mono-xs text-on-surface mt-1 truncate">
-              {formatMoment(run?.created_at)}
+              {formatDateTime(run?.created_at)}
             </span>
           </div>
         </div>
@@ -439,7 +454,7 @@ function RunDetail({ runId, run, modelLabel, sandboxProvider }: RunDetailProps) 
                       {request.tool_name}
                     </div>
                     <span className="font-label-mono-xs text-label-mono-xs text-outline truncate">
-                      {request.skill_name} · riesgo {request.risk_level}
+                      {request.skill_name} · {t('pages.runs.detail.risk', { level: request.risk_level })}
                     </span>
                   </div>
                 </div>
@@ -450,7 +465,7 @@ function RunDetail({ runId, run, modelLabel, sandboxProvider }: RunDetailProps) 
                     onClick={() => void decide(request, false)}
                     className="font-label-mono-xs text-label-mono-xs text-error bg-surface-container-lowest hover:bg-surface-container-high disabled:opacity-50 px-space-sm py-1 rounded transition-colors"
                   >
-                    Denegar
+                    {t('pages.runs.detail.deny')}
                   </button>
                   <button
                     type="button"
@@ -458,7 +473,7 @@ function RunDetail({ runId, run, modelLabel, sandboxProvider }: RunDetailProps) 
                     onClick={() => void decide(request, true)}
                     className="font-label-mono-xs text-label-mono-xs text-on-primary bg-primary hover:bg-primary-container disabled:opacity-50 px-space-sm py-1 rounded transition-colors"
                   >
-                    Permitir
+                    {t('pages.runs.detail.allow')}
                   </button>
                 </div>
               </div>
@@ -470,16 +485,16 @@ function RunDetail({ runId, run, modelLabel, sandboxProvider }: RunDetailProps) 
         <div className="flex flex-col gap-space-xs">
           <div className="flex items-center justify-between">
             <span className="font-label-mono-xs text-label-mono-xs text-outline uppercase tracking-wider">
-              Plan Orquestado ({actions.length} acciones)
+              {t('pages.runs.detail.planHeading', { count: actions.length })}
             </span>
-            <span className="font-label-mono-xs text-label-mono-xs text-secondary">{progress}% Completado</span>
+            <span className="font-label-mono-xs text-label-mono-xs text-secondary">{t('pages.runs.detail.percentComplete', { percent: progress })}</span>
           </div>
           {detail.loading ? (
-            <LoadingRow label="Cargando plan…" />
+            <LoadingRow label={t('pages.runs.detail.planLoading')} />
           ) : detail.error ? (
             <ErrorRow message={detail.error} onRetry={detail.reload} />
           ) : actions.length === 0 ? (
-            <EmptyRow message="Esta ejecución no registró acciones." />
+            <EmptyRow message={t('pages.runs.detail.planEmpty')} />
           ) : (
             <div className="flex flex-col gap-1.5">
               {actions.map((action, index) => {
@@ -496,17 +511,17 @@ function RunDetail({ runId, run, modelLabel, sandboxProvider }: RunDetailProps) 
                       </span>
                       <div className="flex flex-col min-w-0">
                         <span className="font-body-md text-body-md text-on-surface truncate">
-                          Paso {index + 1}: {action.tool_name}
+                          {t('pages.runs.detail.step', { index: index + 1, tool: action.tool_name })}
                         </span>
                         <span className="font-label-mono-xs text-label-mono-xs text-outline truncate">
                           {paramCount > 0
-                            ? `args: ${Object.keys(action.arguments).join(', ')}`
-                            : 'sin argumentos'}
+                            ? t('pages.runs.detail.args', { args: Object.keys(action.arguments).join(', ') })
+                            : t('pages.runs.detail.noArgs')}
                         </span>
                       </div>
                     </div>
                     <span className={`shrink-0 px-1.5 py-0.5 rounded font-label-mono-xs text-label-mono-xs ${step.chip}`}>
-                      {step.label}
+                      {t(step.labelKey)}
                     </span>
                   </div>
                 );
@@ -521,14 +536,14 @@ function RunDetail({ runId, run, modelLabel, sandboxProvider }: RunDetailProps) 
             <div className="flex items-center gap-space-xs">
               <span className="w-2 h-2 rounded-full bg-secondary" />
               <span className="font-label-mono-xs text-label-mono-xs text-outline uppercase tracking-wider">
-                REGISTRO DE ACCIONES (NO ES UN STREAM EN VIVO)
+                {t('pages.runs.detail.logHeading')}
               </span>
             </div>
-            <span className="font-label-mono-xs text-label-mono-xs text-outline font-mono">NO EXPUESTO</span>
+            <span className="font-label-mono-xs text-label-mono-xs text-outline font-mono">{t('common.notExposed')}</span>
           </div>
           <div className="bg-surface-container-lowest p-space-md rounded-lg font-code-base text-code-base flex flex-col gap-1 overflow-x-auto shadow-inner max-h-64">
             {actions.length === 0 ? (
-              <span className="text-outline">Sin eventos registrados para esta ejecución.</span>
+              <span className="text-outline">{t('pages.runs.detail.logEmpty')}</span>
             ) : (
               actions.map((action, index) => {
                 const step = stepMeta(action.status);
@@ -554,28 +569,28 @@ function RunDetail({ runId, run, modelLabel, sandboxProvider }: RunDetailProps) 
           <div className="bg-surface-container-low p-space-md rounded-lg flex flex-col gap-space-xs">
             <div className="flex items-center justify-between">
               <span className="font-label-mono-xs text-label-mono-xs text-outline uppercase">
-                Telemetría de Tokens
+                {t('pages.runs.detail.tokenTelemetry')}
               </span>
-              <span className="font-label-mono-xs text-label-mono-xs text-outline font-mono">NO EXPUESTO</span>
+              <span className="font-label-mono-xs text-label-mono-xs text-outline font-mono">{t('common.notExposed')}</span>
             </div>
             <p className="font-label-mono-xs text-label-mono-xs text-outline leading-5">
-              El endpoint de detalle no reporta uso de tokens, coste ni memoria del runtime.
+              {t('pages.runs.detail.tokenTelemetryNote')}
             </p>
           </div>
           <div className="bg-surface-container-low p-space-md rounded-lg flex items-center justify-between">
             <div className="flex flex-col gap-1 min-w-0">
               <span className="font-label-mono-xs text-label-mono-xs text-outline uppercase">
-                Supervisión Trust Engine
+                {t('pages.runs.detail.trustSupervision')}
               </span>
               <span className="font-body-md text-body-md text-on-surface font-medium truncate">
                 {requests.data?.length
-                  ? `${requests.data.length} solicitud(es) de permiso`
-                  : 'Sin solicitudes de permiso'}
+                  ? t('pages.runs.detail.permissionRequests', { count: requests.data.length })
+                  : t('pages.runs.detail.noPermissionRequests')}
               </span>
               <span className={`font-label-mono-xs text-label-mono-xs ${pending.length ? 'text-primary' : 'text-tertiary'}`}>
                 {pending.length
-                  ? `${pending.length} pendiente(s) de decisión`
-                  : 'Sin bloqueos pendientes'}
+                  ? t('pages.runs.detail.pendingDecisions', { count: pending.length })
+                  : t('pages.runs.detail.noPendingBlocks')}
               </span>
             </div>
             <div className="w-10 h-10 rounded-full bg-tertiary/10 flex items-center justify-center shrink-0">
@@ -587,7 +602,7 @@ function RunDetail({ runId, run, modelLabel, sandboxProvider }: RunDetailProps) 
         {data?.response && (
           <div className="bg-surface-container-low p-space-md rounded-lg flex flex-col gap-space-xs">
             <span className="font-label-mono-xs text-label-mono-xs text-outline uppercase tracking-wider">
-              Respuesta del Agente
+              {t('pages.runs.detail.agentResponse')}
             </span>
             <p className="font-body-md text-body-md text-on-surface whitespace-pre-wrap">{data.response}</p>
           </div>

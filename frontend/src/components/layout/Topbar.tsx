@@ -1,24 +1,28 @@
 import { useLocation } from 'react-router-dom';
 import { useAgentsDialog } from '../../hooks/useAgentsDialog';
+import { useI18n } from '../../hooks/useI18n';
 import { useOverview } from '../../hooks/useOverview';
+import type { MessageKey } from '../../i18n/types';
+import { LanguageSwitch } from './LanguageSwitch';
 
 interface RouteMeta {
   path: string;
-  group: string;
-  label: string;
+  groupKey: MessageKey;
+  labelKey: MessageKey;
 }
 
 const ROUTE_META: RouteMeta[] = [
-  { path: '/', group: 'WORKSPACE', label: 'RUNTIME CONTROL' },
-  { path: '/chat', group: 'WORKSPACE', label: 'CHAT' },
-  { path: '/activity', group: 'WORKSPACE', label: 'ACTIVITY' },
-  { path: '/memory', group: 'WORKSPACE', label: 'MEMORY' },
-  { path: '/runs', group: 'WORKSPACE', label: 'RUNS' },
-  { path: '/tools', group: 'CONFIGURATION', label: 'TOOLS' },
-  { path: '/skills', group: 'CONFIGURATION', label: 'SKILLS' },
-  { path: '/permissions', group: 'CONFIGURATION', label: 'PERMISSIONS' },
-  { path: '/automation', group: 'CONFIGURATION', label: 'AUTOMATION' },
-  { path: '/settings', group: 'CONFIGURATION', label: 'SETTINGS' },
+  { path: '/', groupKey: 'shell.groups.workspace', labelKey: 'shell.topbar.runtimeControl' },
+  { path: '/chat', groupKey: 'shell.groups.workspace', labelKey: 'shell.nav.chat' },
+  { path: '/calendar', groupKey: 'shell.groups.workspace', labelKey: 'shell.nav.calendar' },
+  { path: '/activity', groupKey: 'shell.groups.workspace', labelKey: 'shell.nav.activity' },
+  { path: '/memory', groupKey: 'shell.groups.workspace', labelKey: 'shell.nav.memory' },
+  { path: '/runs', groupKey: 'shell.groups.workspace', labelKey: 'shell.nav.runs' },
+  { path: '/tools', groupKey: 'shell.groups.configuration', labelKey: 'shell.nav.tools' },
+  { path: '/skills', groupKey: 'shell.groups.configuration', labelKey: 'shell.nav.skills' },
+  { path: '/permissions', groupKey: 'shell.groups.configuration', labelKey: 'shell.nav.permissions' },
+  { path: '/automation', groupKey: 'shell.groups.configuration', labelKey: 'shell.nav.automation' },
+  { path: '/settings', groupKey: 'shell.groups.configuration', labelKey: 'shell.nav.settings' },
 ];
 
 function resolveMeta(pathname: string): RouteMeta {
@@ -40,6 +44,7 @@ function formatUptime(seconds: number | undefined): string {
 
 export function Topbar() {
   const { pathname } = useLocation();
+  const { t } = useI18n();
   const meta = resolveMeta(pathname);
   const { data, connected } = useOverview();
   const { open: openAgents } = useAgentsDialog();
@@ -50,26 +55,26 @@ export function Topbar() {
   const trust = data?.trust.default_decision ?? '--';
 
   return (
-    <header className="fixed top-0 left-64 right-0 h-14 bg-surface/80 backdrop-blur-xl z-40 flex items-center justify-between px-space-lg shadow-rail">
+    <header className="fixed top-0 left-16 right-0 h-14 bg-surface/80 backdrop-blur-xl z-40 flex items-center justify-between px-space-lg shadow-rail">
       <div className="flex items-center gap-space-md">
         <div className="flex items-center gap-space-xs font-label-mono-xs text-label-mono-xs text-outline">
           <span className="material-symbols-outlined text-[14px]">layers</span>
-          <span>{meta.group}</span>
+          <span className="uppercase">{t(meta.groupKey)}</span>
           <span className="text-outline-variant">/</span>
-          <span className="text-on-surface uppercase">{meta.label}</span>
+          <span className="text-on-surface uppercase">{t(meta.labelKey)}</span>
         </div>
         <div className="hidden lg:flex items-center gap-space-xs px-space-sm py-0.5 bg-surface-container-low rounded text-on-surface-variant font-label-mono-xs text-label-mono-xs">
           <span
             className={`w-1.5 h-1.5 rounded-full ${connected ? 'bg-secondary' : 'bg-error'}`}
           />
           <span>
-            {model ? `${model.model} · ${model.provider}` : 'Modelo no disponible'}
-            {model && !model.configured ? ' · sin credenciales' : ''}
+            {model ? `${model.model} · ${model.provider}` : t('shell.topbar.modelUnavailable')}
+            {model && !model.configured ? ` · ${t('shell.topbar.noCredentials')}` : ''}
           </span>
           {data && (
             <>
               <span className="text-outline-variant">·</span>
-              <span>uptime {formatUptime(data.system.uptime_seconds)}</span>
+              <span>{t('shell.topbar.uptime', { value: formatUptime(data.system.uptime_seconds) })}</span>
             </>
           )}
         </div>
@@ -78,14 +83,14 @@ export function Topbar() {
         <button
           type="button"
           onClick={openAgents}
-          title="Crear o cambiar el agente activo"
+          title={t('shell.topbar.openAgents')}
           className="flex items-center gap-space-xs px-space-sm py-0.5 bg-surface-container-low rounded font-label-mono-xs text-label-mono-xs hover:bg-surface-container transition-colors"
         >
           <span
             className={`w-1.5 h-1.5 rounded-full ${agent ? 'bg-tertiary' : 'bg-error'}`}
           />
           <span className="text-on-surface-variant max-w-[180px] truncate">
-            {agent ? `Agente: ${agent.name}` : 'Sin agente activo'}
+            {agent ? t('shell.topbar.activeAgent', { name: agent.name }) : t('shell.topbar.noActiveAgent')}
           </span>
           <span className="material-symbols-outlined text-[14px] text-outline">expand_more</span>
         </button>
@@ -94,11 +99,17 @@ export function Topbar() {
       <div className="flex items-center gap-space-md">
         <div className="hidden md:flex items-center gap-space-xs px-space-sm py-0.5 bg-surface-container-low rounded font-label-mono-xs text-label-mono-xs text-primary">
           <span className="material-symbols-outlined text-[14px] text-primary">security</span>
-          <span>TRUST {trust} · Firewall v2.4</span>
+          <span>{t('shell.topbar.trust', { decision: trust })}</span>
         </div>
+        <LanguageSwitch />
+        <button type="button" title="Cerrar sesión" aria-label="Cerrar sesión"
+          onClick={() => window.dispatchEvent(new Event('nexus:unauthorized'))}
+          className="text-outline hover:text-on-surface">
+          <span className="material-symbols-outlined text-[18px]">logout</span>
+        </button>
         <div className="hidden md:flex items-center gap-space-sm bg-surface-container-low px-space-sm py-1 rounded text-on-surface-variant cursor-pointer hover:bg-surface-container hover:text-on-surface transition-colors">
           <span className="material-symbols-outlined text-[15px]">search</span>
-          <span className="font-body-sm text-body-sm text-outline">Quick Actions</span>
+          <span className="font-body-sm text-body-sm text-outline">{t('shell.topbar.quickActions')}</span>
           <kbd className="font-label-mono-xs text-label-mono-xs bg-surface-container px-1 py-0.5 rounded text-on-surface-variant">
             ⌘K
           </kbd>
@@ -116,7 +127,7 @@ export function Topbar() {
               pending > 0 ? 'text-error' : 'text-secondary'
             }`}
           >
-            {pending} Pending
+            {t('shell.topbar.pending', { count: pending })}
           </span>
         </div>
         <div className="w-8 h-8 rounded-full bg-primary flex items-center justify-center cursor-pointer">

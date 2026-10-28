@@ -1,13 +1,18 @@
 from datetime import UTC, datetime, timedelta
 
 from app.domain.entities.calendar_event import CalendarEvent
+from app.domain.entities.knowledge_chunk import KnowledgeChunk
 from app.domain.entities.permission_request import PermissionRequest
+from app.domain.entities.reminder import Reminder
 from app.domain.entities.task import Task
 from app.domain.ports.permission_request_repository import PermissionRequestRepository
 from app.domain.repositories.calendar_event_repository import CalendarEventRepository
+from app.domain.repositories.knowledge_repository import KnowledgeRepository
+from app.domain.repositories.reminder_repository import ReminderRepository
 from app.domain.repositories.task_repository import TaskRepository
 from app.domain.value_objects.entity_id import EntityId
 from app.domain.value_objects.permission_request_status import PermissionRequestStatus
+from app.domain.value_objects.reminder_status import ReminderStatus
 from app.domain.value_objects.task_status import TaskStatus
 
 
@@ -138,3 +143,128 @@ def make_event(agent_id: EntityId, title: str = "Standup", **kwargs) -> Calendar
         agent_id=agent_id,
         **kwargs,
     )
+
+
+class FakeKnowledgeRepository(KnowledgeRepository):
+    """In-memory knowledge base that preserves the real owner scoping.
+
+    Search is intentionally the same term-AND semantics as the SQL adapter so a
+    use-case test is not verifying a fake that is more permissive than production.
+    """
+
+    def __init__(self) -> None:
+        self.items: list[KnowledgeChunk] = []
+
+    def _owned(
+        self, agent_id: EntityId, user_id: EntityId | None
+    ) -> list[KnowledgeChunk]:
+        return [
+            chunk
+            for chunk in self.items
+            if chunk.agent_id == agent_id and chunk.user_id == user_id
+        ]
+
+    def document_hash(
+        self, agent_id: EntityId, user_id: EntityId | None, source: str
+    ) -> str | None:
+        for chunk in self._owned(agent_id, user_id):
+            if chunk.source == source:
+                return chunk.document_hash
+        return None
+
+    def count_document(
+        self, agent_id: EntityId, user_id: EntityId | None, source: str
+    ) -> int:
+        return sum(
+            1
+            for chunk in self._owned(agent_id, user_id)
+            if chunk.source == source
+        )
+
+    def replace_document(
+        self,
+        *,
+        agent_id: EntityId,
+        user_id: EntityId | None,
+        source: str,
+        chunks: list[KnowledgeChunk],
+    ) -> int:
+        self.items = [
+            chunk
+            for chunk in self.items
+            if not (
+                chunk.agent_id == agent_id
+                and chunk.user_id == user_id
+                and chunk.source == source
+            )
+        ]
+        self.items.extend(chunks)
+        return len(chunks)
+
+    def search(
+        self,
+        *,
+        agent_id: EntityId,
+        user_id: EntityId | None,
+        query: str,
+        candidate_limit: int,
+    ) -> list[KnowledgeChunk]:
+        terms = [term for term in query.lower().split() if term]
+        if not terms:
+            return []
+        matches = [
+            chunk
+            for chunk in self._owned(agent_id, user_id)
+            if all(
+                term in chunk.content.lower() or term in chunk.title.lower()
+                for term in terms
+            )
+        ]
+        matches.sort(key=lambda chunk: chunk.created_at, reverse=True)
+        return matches[:candidate_limit]
+
+
+class FakeReminderRepository(ReminderRepository):
+    def __init__(self) -> None:
+        self.items: dict[EntityId, Reminder] = {}
+
+    def save(self, reminder: Reminder) -> Reminder:
+        self.items[reminder.id] = reminder
+        return reminder
+
+    def get_by_id(
+        self, reminder_id: EntityId, agent_id: EntityId, user_id: EntityId | None
+    ) -> Reminder | None:
+        reminder = self.items.get(reminder_id)
+        if (
+            reminder is None
+            or reminder.agent_id != agent_id
+            or reminder.user_id != user_id
+        ):
+            return None
+        return reminder
+
+    def list_by_owner(
+        self,
+        *,
+        agent_id: EntityId,
+        user_id: EntityId | None,
+        status: ReminderStatus | None = None,
+        upcoming_only: bool = False,
+        now: datetime | None = None,
+        limit: int = 20,
+    ) -> list[Reminder]:
+        found = [
+            reminder
+            for reminder in self.items.values()
+            if reminder.agent_id == agent_id and reminder.user_id == user_id
+        ]
+        if status is not None:
+            found = [reminder for reminder in found if reminder.status is status]
+        if upcoming_only:
+            reference = now or datetime.now(UTC)
+            found = [
+                reminder for reminder in found if reminder.remind_at >= reference
+            ]
+        found.sort(key=lambda reminder: reminder.remind_at)
+        return found[:limit]

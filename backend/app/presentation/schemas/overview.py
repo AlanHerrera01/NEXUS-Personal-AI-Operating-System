@@ -49,6 +49,10 @@ class AgentRunView(BaseModel):
 class ActiveRunsView(BaseModel):
     active_count: int
     items: list[AgentRunView] = Field(default_factory=list)
+    #: The owner's most recent runs regardless of state. ``items`` only carries
+    #: the ones still in flight, so a dashboard that wants to get back into a
+    #: finished run had nothing to list once everything settled.
+    recent: list[AgentRunView] = Field(default_factory=list)
 
 
 class AuthorizationView(BaseModel):

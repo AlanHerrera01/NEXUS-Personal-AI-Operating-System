@@ -5,6 +5,7 @@ from app.application.always_on.execution_coordinator import JobExecutionCoordina
 from app.application.security.approval_service import ApprovalService
 from app.domain.entities.permission_request import PermissionRequest
 from app.domain.value_objects.entity_id import EntityId
+from app.domain.value_objects.permission_request_status import PermissionRequestStatus
 from app.presentation.dependencies import get_approval_service
 from app.presentation.dependencies.always_on import get_job_execution_coordinator
 from app.presentation.dependencies.identity import current_user_id
@@ -117,32 +118,44 @@ async def approve_permission_request(
     coordinator: JobExecutionCoordinator = Depends(get_job_execution_coordinator),
     user_id: EntityId = Depends(current_user_id),
 ) -> PermissionRequestResponse:
-    """Approve a pending permission request.
+    """Approve a pending permission request by resuming its run.
 
-    Recording APPROVED is only half the job: the run has to be resumed, or it
-    stays in WAITING_PERMISSION forever and the approved action never executes.
-    That was already true interactively, and it is much worse for a scheduled
-    job -- a run parked on an ASK holds an open execution and a concurrency slot
-    with nothing left to move it.
-
-    The coordinator resumes through the orchestrator, so the decision is re-checked
-    by the Trust Engine and a fresh single-use authorization is minted rather than
-    the approval being replayed as a token. A run that no scheduled job owns is a
-    harmless no-op.
+    Recording APPROVED and resuming are one step, not two. The orchestrator's
+    ``resume`` is what re-checks the Trust Engine and calls
+    ``approval_service.approve`` once the action is actually allowed, so this
+    route must not mark the request APPROVED first. Doing that left resume with
+    no PENDING request to match and the run parked in WAITING_PERMISSION forever:
+    the "approved" action never ran. The coordinator resumes through the
+    orchestrator, so a fresh single-use authorization is minted there rather than
+    the approval being replayed as a token.
     """
     request = _load_owned_request(service, run_id, request_id, user_id)
-    try:
-        approved = service.approve(request.id)
-    except ValueError as error:
-        # Expiry and already-decided are genuine 409s: the request exists and is
-        # the caller's, but its state does not permit this transition. The message
-        # is our own, so it does not leak anything about other runs.
+    if request.status is not PermissionRequestStatus.PENDING:
+        # Already-decided and expired are genuine 409s: the request exists and
+        # is the caller's, but its state does not permit this transition.
         raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT, detail=str(error)
-        ) from error
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Cannot approve request in status: {request.status.value}",
+        )
 
-    await coordinator.reconcile(request.agent_run_id, allow=True, user_id=user_id)
-    return PermissionRequestResponse.from_entity(approved)
+    outcome = await coordinator.reconcile(
+        request.agent_run_id, allow=True, user_id=user_id
+    )
+    decided = service.get_by_id(request.id)
+    if decided is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Permission request not found"
+        )
+    if decided.status is PermissionRequestStatus.PENDING:
+        # Nothing recorded the decision: the run was not in a state resume could
+        # advance, so there was no action to authorize. Refusing is the honest
+        # answer -- marking it APPROVED would claim an execution that never
+        # happened, which is exactly the bug this route used to have.
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=outcome.detail or "The agent run could not be resumed",
+        )
+    return PermissionRequestResponse.from_entity(decided)
 
 
 @router.post("/{run_id}/permission-requests/{request_id}/reject", status_code=status.HTTP_200_OK)
@@ -153,19 +166,32 @@ async def reject_permission_request(
     coordinator: JobExecutionCoordinator = Depends(get_job_execution_coordinator),
     user_id: EntityId = Depends(current_user_id),
 ) -> PermissionRequestResponse:
-    """Reject a pending permission request.
+    """Reject a pending permission request by resuming its run.
 
     Resumed with ``allow=False`` so the run observes the refusal and can finish
     rather than being left parked. A rejection is a decision, not a
-    cancellation: the agent may still report what it was going to do.
+    cancellation: the agent may still report what it was going to do. As with
+    approve, the resume records the rejection -- the route must not flip the
+    request first, or resume would find no PENDING request to act on.
     """
     request = _load_owned_request(service, run_id, request_id, user_id)
-    try:
-        rejected = service.reject(request.id)
-    except ValueError as error:
+    if request.status is not PermissionRequestStatus.PENDING:
         raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT, detail=str(error)
-        ) from error
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Cannot reject request in status: {request.status.value}",
+        )
 
-    await coordinator.reconcile(request.agent_run_id, allow=False, user_id=user_id)
-    return PermissionRequestResponse.from_entity(rejected)
+    outcome = await coordinator.reconcile(
+        request.agent_run_id, allow=False, user_id=user_id
+    )
+    decided = service.get_by_id(request.id)
+    if decided is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Permission request not found"
+        )
+    if decided.status is PermissionRequestStatus.PENDING:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=outcome.detail or "The agent run could not be resumed",
+        )
+    return PermissionRequestResponse.from_entity(decided)

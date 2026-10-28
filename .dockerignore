@@ -8,7 +8,14 @@ __pycache__
 venv
 .env
 .env.*
+.nexus-access-key
 dist
 build
 .DS_Store
 *.log
+
+# Local video production and recording/session artifacts
+nexus-video
+nexus-videos
+.test-runtime
+.test-runtime-*

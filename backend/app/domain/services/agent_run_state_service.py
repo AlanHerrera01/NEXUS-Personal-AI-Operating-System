@@ -23,6 +23,10 @@ class AgentRunStateService:
             AgentRunStatus.CANCELLED,
         },
         AgentRunStatus.WAITING_PERMISSION: {
+            # EXECUTING is the approved-action path. PLANNING is the answered-
+            # question path: a run that stopped to ask for missing detail goes
+            # back to planning with the detail instead of executing anything.
+            AgentRunStatus.PLANNING,
             AgentRunStatus.EXECUTING,
             AgentRunStatus.BLOCKED,
             AgentRunStatus.CANCELLED,

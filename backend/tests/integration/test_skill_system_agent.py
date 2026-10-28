@@ -108,9 +108,10 @@ def test_agent_saves_a_memory_through_the_memory_skill(memory_service: MemorySer
     run = AgentRun(
         agent_id=EntityId.new(),
         user_request="Recuerda que mi proyecto usa PostgreSQL",
+        user_id=EntityId.new(),
     )
 
-    result = run_async(orchestrator.execute(run))
+    result = run_async(orchestrator.execute(run, user_id=str(run.user_id)))
 
     assert result.response == "Recordado"
     assert len(memory_repository.items) == 1
@@ -126,9 +127,13 @@ def test_memory_policy_still_decides_when_the_agent_asks_to_remember(
         AgentDecision.tool_call("memory.save", {"content": "hi", "memory_type": "SEMANTIC"}),
     )
     orchestrator, _, _, _, _ = build_agent([memory_skill(memory_service)], brain)
-    run = AgentRun(agent_id=EntityId.new(), user_request="Recuerda algo")
+    run = AgentRun(
+        agent_id=EntityId.new(),
+        user_request="Recuerda algo",
+        user_id=EntityId.new(),
+    )
 
-    result = run_async(orchestrator.execute(run))
+    result = run_async(orchestrator.execute(run, user_id=str(run.user_id)))
 
     assert result.observations[0].success is True
     assert result.observations[0].output["saved"] is False

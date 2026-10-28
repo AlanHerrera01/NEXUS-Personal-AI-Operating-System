@@ -50,6 +50,31 @@ class FakeNebiusClient:
         }
 
 
+class CapturingNebiusClient:
+    def __init__(self):
+        self.payload = None
+
+    async def create_chat_completion(self, payload):
+        self.payload = payload
+        return {"model": payload["model"], "choices": [{"message": {"content": "ok"}}], "usage": {}}
+
+
+def test_provider_uses_its_configured_generation_parameters() -> None:
+    # A default on LLMRequest itself would silently outrank the configured
+    # budget for every caller that leaves it unset, which is all of them but the
+    # probe route. That is how a hard-coded 512 truncated a reasoning model
+    # before it emitted any content, and the run failed with an empty reply.
+    client = CapturingNebiusClient()
+    provider = NebiusLLMProvider(
+        provider_settings(llm_max_tokens=2048, llm_temperature=0.7), client=client
+    )
+
+    asyncio.run(provider.generate(LLMRequest((LLMMessage(LLMMessageRole.USER, "Hello"),))))
+
+    assert client.payload["max_tokens"] == 2048
+    assert client.payload["temperature"] == 0.7
+
+
 class RetryingNebiusClient:
     def __init__(self):
         self.calls = 0

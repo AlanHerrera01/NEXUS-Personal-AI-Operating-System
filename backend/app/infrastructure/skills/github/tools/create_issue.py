@@ -1,13 +1,16 @@
-from datetime import datetime
+from pydantic import Field
 
 from app.application.tools.base import UseCaseTool
-from app.domain.ports.tool import ToolInput, ToolOutput
+from app.domain.ports.tool import ToolContext, ToolInput, ToolOutput
+from app.domain.value_objects.risk_level import RiskLevel
+from app.infrastructure.skills.github.client import GitHubClient, REPOSITORY_PATTERN
 
 
 class CreateGitHubIssueInput(ToolInput):
-    title: str
-    body: str | None = None
-    labels: list[str] | None = None
+    repository: str | None = Field(default=None, pattern="^" + REPOSITORY_PATTERN + "$", max_length=200)
+    title: str = Field(min_length=1, max_length=256)
+    body: str | None = Field(default=None, max_length=60000)
+    labels: list[str] | None = Field(default=None, max_length=50)
 
 
 class CreateGitHubIssueOutput(ToolOutput):
@@ -18,38 +21,11 @@ class CreateGitHubIssueOutput(ToolOutput):
 
 
 class CreateGitHubIssueTool(UseCaseTool):
-    """Crea un issue en GitHub - SIMULATION MODE.
+    def __init__(self, client: GitHubClient | None = None) -> None:
+        self.client = client or GitHubClient()
+        super().__init__(name="github.create_issue", description="Create a real GitHub issue in repository owner/repo.", skill_name="github", input_model=CreateGitHubIssueInput, input_schema=CreateGitHubIssueInput.model_json_schema(), risk_level=RiskLevel.MEDIUM, side_effect=True, requires_confirmation=True)
 
-    En modo simulation, crea un issue con número consecutivo y devuelve
-    una URL simulada. En producción real, conectaría con la API de GitHub.
-    El requiere_confirmation=True significa que siempre pausará para
-    aprobación humana antes de crear el issue.
-    """
-
-    def __init__(self) -> None:
-        super().__init__(
-            name="github.create_issue",
-            description="Create a GitHub issue",
-            skill_name="github",
-            input_model=CreateGitHubIssueInput,
-            input_schema=CreateGitHubIssueInput.model_json_schema(),
-            risk_level="LOW",
-            read_only=False,
-            side_effect=True,
-            requires_confirmation=True,
-        )
-
-    async def run(self, payload: CreateGitHubIssueInput, context: object) -> CreateGitHubIssueOutput:
-        # SIMULATION: Crear un issue con número basado en el título
-        import hashlib
-        number = int(hashlib.md5(payload.title.encode()).hexdigest()[:6], 16) % 1000 + 1
-
-        # Generar URL simulada
-        url = f"https://github.com/issue/{number}_{payload.title.lower().replace(' ', '-')}"
-
-        return CreateGitHubIssueOutput(
-            issue_number=number,
-            title=payload.title,
-            html_url=url,
-            state="open",
-        )
+    async def run(self, payload: CreateGitHubIssueInput, context: ToolContext) -> CreateGitHubIssueOutput:
+        repository = self.client.repository(payload.repository)
+        data = await self.client.request("POST", f"/repos/{repository}/issues", context, payload=payload.model_dump(exclude={"repository"}, exclude_none=True))
+        return CreateGitHubIssueOutput(issue_number=data["number"], title=data["title"], html_url=data.get("html_url"), state=data["state"])

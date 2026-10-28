@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { useI18n } from '../../hooks/useI18n';
 import { useOverview } from '../../hooks/useOverview';
 import { useAsyncData } from '../../hooks/useAsyncData';
 import { agentApi } from '../../services/api/agentApi';
@@ -18,6 +19,7 @@ import type { Agent, AgentsResponse } from '../../types';
  * previous agent went inactive.
  */
 export function AgentsDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
+  const { t } = useI18n();
   const { refresh } = useOverview();
   const agents = useAsyncData(
     () =>
@@ -55,7 +57,7 @@ export function AgentsDialog({ open, onClose }: { open: boolean; onClose: () => 
       setDescription('');
       settle();
     } catch (caught) {
-      setError(caught instanceof ApiError ? caught.message : 'No se pudo crear el agente.');
+      setError(caught instanceof ApiError ? caught.message : t('shell.dialogs.agents.createFailed'));
     } finally {
       setBusy(null);
     }
@@ -69,7 +71,9 @@ export function AgentsDialog({ open, onClose }: { open: boolean; onClose: () => 
       await agentApi.updateAgent(agent.id, { status: 'ACTIVE' });
       settle();
     } catch (caught) {
-      setError(caught instanceof ApiError ? caught.message : 'No se pudo activar el agente.');
+      setError(
+        caught instanceof ApiError ? caught.message : t('shell.dialogs.agents.activateFailed'),
+      );
     } finally {
       setBusy(null);
     }
@@ -91,10 +95,10 @@ export function AgentsDialog({ open, onClose }: { open: boolean; onClose: () => 
             </div>
             <div>
               <h2 className="font-headline-sm text-headline-sm text-on-surface font-semibold">
-                Agentes
+                {t('shell.dialogs.agents.title')}
               </h2>
               <p className="font-body-sm text-body-sm text-on-surface-variant">
-                El agente activo es el que ejecuta los objetivos.
+                {t('shell.dialogs.agents.subtitle')}
               </p>
             </div>
           </div>
@@ -110,27 +114,26 @@ export function AgentsDialog({ open, onClose }: { open: boolean; onClose: () => 
         <div className="p-space-md rounded-lg bg-surface-container-lowest flex items-start gap-2">
           <span className="material-symbols-outlined text-[18px] text-secondary">info</span>
           <p className="font-body-sm text-body-sm text-on-surface-variant leading-relaxed">
-            Un agente es aquello a lo que pertenece cada ejecución: sin uno, el objetivo no tiene
-            contra qué correr. Activar uno desactiva los demás, porque el panel trabaja con un
-            único agente activo.
+            {t('shell.dialogs.agents.explanation')}
           </p>
         </div>
 
         {/* Registry */}
         <div className="flex flex-col gap-1.5">
           <span className="font-label-mono-xs text-label-mono-xs uppercase text-outline">
-            Registrados
+            {t('shell.dialogs.agents.registered')}
           </span>
           {agents.loading ? (
-            <span className="font-body-sm text-body-sm text-outline">Cargando agentes…</span>
+            <span className="font-body-sm text-body-sm text-outline">
+              {t('shell.dialogs.agents.loading')}
+            </span>
           ) : agents.error ? (
             <span className="font-body-sm text-body-sm text-error" role="alert">
               {agents.error}
             </span>
           ) : items.length === 0 ? (
             <span className="font-body-sm text-body-sm text-outline">
-              Todavía no hay ningún agente. Crea el primero abajo; quedará activo y el objetivo
-              podrá ejecutarse.
+              {t('shell.dialogs.agents.empty')}
             </span>
           ) : (
             items.map((agent) => {
@@ -145,6 +148,7 @@ export function AgentsDialog({ open, onClose }: { open: boolean; onClose: () => 
                       <span className="font-body-sm text-body-sm text-on-surface font-medium truncate">
                         {agent.name}
                       </span>
+                      {/* The agent's status is the backend's own value. */}
                       <span
                         className={`font-label-mono-xs text-label-mono-xs px-1.5 py-0.5 rounded ${
                           isActive
@@ -167,7 +171,11 @@ export function AgentsDialog({ open, onClose }: { open: boolean; onClose: () => 
                     onClick={() => void activate(agent)}
                     className="px-space-sm py-1 rounded bg-surface-container text-on-surface font-label-mono-xs text-label-mono-xs font-semibold hover:bg-surface-container-high disabled:opacity-40 transition-colors whitespace-nowrap"
                   >
-                    {isActive ? 'ACTIVO' : busy === agent.id ? 'Activando…' : 'ACTIVAR'}
+                    {isActive
+                      ? t('shell.dialogs.agents.active')
+                      : busy === agent.id
+                        ? t('shell.dialogs.agents.activating')
+                        : t('shell.dialogs.agents.activate')}
                   </button>
                 </div>
               );
@@ -178,12 +186,12 @@ export function AgentsDialog({ open, onClose }: { open: boolean; onClose: () => 
         {/* Create */}
         <div className="flex flex-col gap-space-sm pt-space-sm border-t border-outline-variant/20">
           <span className="font-label-mono-xs text-label-mono-xs uppercase text-outline">
-            Nuevo agente
+            {t('shell.dialogs.agents.newAgent')}
           </span>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-space-sm">
             <label className="flex flex-col gap-1">
               <span className="font-label-mono-xs text-label-mono-xs uppercase text-outline">
-                Nombre
+                {t('common.name')}
               </span>
               <input
                 value={name}
@@ -194,12 +202,12 @@ export function AgentsDialog({ open, onClose }: { open: boolean; onClose: () => 
             </label>
             <label className="flex flex-col gap-1">
               <span className="font-label-mono-xs text-label-mono-xs uppercase text-outline">
-                Descripción
+                {t('common.description')}
               </span>
               <input
                 value={description}
                 onChange={(event) => setDescription(event.target.value)}
-                placeholder="Agente personal por defecto"
+                placeholder={t('shell.dialogs.agents.descriptionPlaceholder')}
                 className="bg-surface-container-lowest rounded-lg px-space-sm py-2 font-body-sm text-body-sm text-on-surface placeholder:text-outline outline-none focus:ring-1 focus:ring-primary/40"
               />
             </label>
@@ -219,7 +227,9 @@ export function AgentsDialog({ open, onClose }: { open: boolean; onClose: () => 
               className="px-space-md py-1.5 rounded bg-primary text-on-primary font-body-sm text-body-sm font-semibold hover:bg-primary-container hover:text-on-primary-container disabled:opacity-50 transition-all flex items-center gap-1"
             >
               <span className="material-symbols-outlined text-[16px]">add</span>
-              {busy === 'create' ? 'Creando…' : 'Crear agente'}
+              {busy === 'create'
+                ? t('shell.dialogs.agents.creating')
+                : t('shell.dialogs.agents.create')}
             </button>
           </div>
         </div>

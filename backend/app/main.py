@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.config.settings import get_settings
@@ -11,6 +11,8 @@ from app.infrastructure.logging import configure_logging
 from app.presentation.api.activity_routes import router as activity_router
 from app.presentation.api.agent_routes import router as agent_router
 from app.presentation.api.agent_run_routes import router as agent_run_router
+from app.presentation.api.calendar_routes import router as calendar_router
+from app.presentation.api.conversation_routes import router as conversation_router
 from app.presentation.api.event_ingress_routes import router as event_ingress_router
 from app.presentation.api.health_routes import router as health_router
 from app.presentation.api.llm_health_routes import router as llm_health_router
@@ -26,6 +28,7 @@ from app.presentation.api.scheduled_job_routes import router as scheduled_job_ro
 from app.presentation.api.settings_routes import router as settings_router
 from app.presentation.api.skills_routes import router as skills_router
 from app.presentation.dependencies.security import get_security_audit
+from app.presentation.dependencies.identity import current_user_id, require_authentication
 from app.presentation.middleware.security import (
     BodySizeLimitMiddleware,
     RateLimitMiddleware,
@@ -96,6 +99,7 @@ def create_app() -> FastAPI:
         version="0.1.0",
         description="NEXUS backend: reasoning, memory, tools, MCP, trust and sandboxed execution.",
         lifespan=lifespan,
+        dependencies=[Depends(require_authentication)],
     )
     
     # Middleware order matters. Starlette applies these outside-in in reverse
@@ -140,6 +144,8 @@ def create_app() -> FastAPI:
     application.include_router(llm_health_router)
     application.include_router(agent_router)
     application.include_router(agent_run_router)
+    application.include_router(conversation_router)
+    application.include_router(calendar_router)
     application.include_router(skills_router)
     # MCP server registration: stores configuration only, never connects.
     application.include_router(mcp_router)
@@ -155,6 +161,10 @@ def create_app() -> FastAPI:
     application.include_router(scheduled_job_router)
     application.include_router(proactive_rule_router)
     application.include_router(event_ingress_router)
+    @application.get("/api/v1/auth/me", tags=["auth"])
+    def authenticated_operator():
+        return {"user_id": str(current_user_id())}
+
     return application
 
 

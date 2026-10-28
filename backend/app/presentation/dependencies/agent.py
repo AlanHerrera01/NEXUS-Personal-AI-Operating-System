@@ -27,20 +27,40 @@ from app.application.tools.executor import RegistryToolExecutor
 from app.application.tools.registry import InMemoryToolRegistry
 from app.config.settings import Settings, get_settings
 from app.domain.ports.agent_brain import AgentBrain
+from app.domain.ports.mcp_tool_provider import MCPToolProviderPort
 from app.domain.ports.skill import Skill
 from app.domain.ports.skill_selector import SkillSelector
 from app.domain.repositories.calendar_event_repository import CalendarEventRepository
+from app.domain.repositories.knowledge_repository import KnowledgeRepository
+from app.domain.repositories.reminder_repository import ReminderRepository
 from app.infrastructure.persistence.repositories.agent_action_repository import SqlAlchemyAgentActionRepository
 from app.infrastructure.persistence.repositories.agent_run_repository import SqlAlchemyAgentRunRepository
 from app.infrastructure.persistence.repositories.calendar_event_repository import (
     SqlAlchemyCalendarEventRepository,
 )
+from app.infrastructure.persistence.repositories.knowledge_repository import (
+    SqlAlchemyKnowledgeRepository,
+)
 from app.infrastructure.persistence.repositories.memory_repository import SqlAlchemyMemoryRepository
+from app.infrastructure.persistence.repositories.reminder_repository import (
+    SqlAlchemyReminderRepository,
+)
 from app.infrastructure.persistence.repositories.task_repository import SqlAlchemyTaskRepository
 from app.infrastructure.llm.nebius.provider import NebiusLLMProvider
+from app.infrastructure.skills.docker.skill import DockerSkill
+from app.infrastructure.skills.files.skill import FilesSkill
+from app.infrastructure.skills.git.skill import GitSkill
+from app.infrastructure.skills.knowledge.skill import KnowledgeSkill
+from app.infrastructure.skills.mail.skill import EmailSkill
 from app.infrastructure.skills.memory.skill import MemorySkill
+from app.infrastructure.skills.reminders.skill import ReminderSkill
 from app.infrastructure.skills.tasks.skill import TaskSkill
+from app.infrastructure.skills.web.skill import WebSkill
 from app.presentation.dependencies.persistence import session_dependency
+from app.presentation.dependencies.mcp import (
+    build_mcp_tool_provider,
+    mcp_tool_provider_dependency,
+)
 from app.presentation.dependencies.runtime import build_runtime_tool_executor
 from app.presentation.dependencies.security import (
     get_approval_service,
@@ -64,9 +84,13 @@ def build_skills(
     task_repository: SqlAlchemyTaskRepository,
     calendar_repository: CalendarEventRepository,
     memory_service: MemoryService,
+    settings: Settings | None = None,
+    knowledge_repository: KnowledgeRepository | None = None,
+    reminder_repository: ReminderRepository | None = None,
 ) -> list[Skill]:
     """Composition root for capabilities. Adding a skill means adding one line here."""
-    return [
+    resolved = settings or get_settings()
+    skills: list[Skill] = [
         TaskSkill(task_repository),
         MemorySkill(
             search_memories=SearchMemoriesUseCase(memory_service),
@@ -74,12 +98,26 @@ def build_skills(
             save_memory=SaveMemoryUseCase(memory_service),
             delete_memory=DeleteMemoryUseCase(memory_service),
         ),
-        GitHubSkill(),
+        GitHubSkill(resolved),
         CalendarSkill(calendar_repository),
+        WebSkill(resolved),
+        FilesSkill(resolved),
+        EmailSkill(resolved),
+        DockerSkill(resolved),
+        GitSkill(resolved),
     ]
+    if knowledge_repository is not None:
+        skills.append(KnowledgeSkill(knowledge_repository, resolved))
+    if reminder_repository is not None:
+        skills.append(ReminderSkill(reminder_repository))
+    return skills
 
 
-def build_skill_system(session: Session, selector: SkillSelector | None = None) -> SkillSystem:
+def build_skill_system(
+    session: Session,
+    selector: SkillSelector | None = None,
+    settings: Settings | None = None,
+) -> SkillSystem:
     tools = InMemoryToolRegistry()
     skills = SkillRegistry(tools)
     memory_service = MemoryService(
@@ -91,6 +129,9 @@ def build_skill_system(session: Session, selector: SkillSelector | None = None) 
         SqlAlchemyTaskRepository(session),
         SqlAlchemyCalendarEventRepository(session),
         memory_service,
+        settings,
+        knowledge_repository=SqlAlchemyKnowledgeRepository(session),
+        reminder_repository=SqlAlchemyReminderRepository(session),
     ):
         skills.register(skill)
     skill_selector = selector or KeywordSkillSelector()
@@ -126,6 +167,7 @@ def build_orchestrator(
     trust_engine: TrustEngine,
     approval_service: ApprovalService,
     settings: Settings | None = None,
+    mcp_tool_provider: MCPToolProviderPort | None = None,
 ) -> AgentOrchestrator:
     """Wire the agent pipeline for one session.
 
@@ -141,6 +183,7 @@ def build_orchestrator(
     the caller so the always-on loop and a request pick the same model.
     """
     resolved = settings or resolve_effective_settings(session)
+    provider = mcp_tool_provider or build_mcp_tool_provider(session, resolved)
     # The orchestrator's executor is the sandboxing one, not the raw registry
     # executor. Phase 10 existed as a composition-root builder that nothing
     # called, so every tool ran in the API process and no sandbox was ever
@@ -171,6 +214,7 @@ def build_orchestrator(
         max_permission_requests=get_settings().agent_max_permission_requests,
         max_denied_actions=get_settings().agent_max_denied_actions,
         max_runtime_seconds=float(get_settings().agent_max_runtime_seconds),
+        mcp_tool_provider=provider,
     )
 
 
@@ -179,5 +223,12 @@ def orchestrator_dependency(
     session: Session = Depends(session_dependency),
     trust_engine: TrustEngine = Depends(get_trust_engine),
     approval_service: ApprovalService = Depends(get_approval_service),
+    mcp_provider: MCPToolProviderPort = Depends(mcp_tool_provider_dependency),
 ) -> AgentOrchestrator:
-    return build_orchestrator(session, system, trust_engine, approval_service)
+    return build_orchestrator(
+        session,
+        system,
+        trust_engine,
+        approval_service,
+        mcp_tool_provider=mcp_provider,
+    )

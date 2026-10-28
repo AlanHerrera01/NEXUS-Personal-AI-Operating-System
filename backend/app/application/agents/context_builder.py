@@ -23,6 +23,7 @@ class AgentContextBuilder:
         available_tools: list | None = None,
         *,
         user_id: EntityId | None = None,
+        conversation_history: list[dict[str, str]] | None = None,
     ) -> dict:
         memories = []
         if self.memory_retriever is not None:
@@ -42,6 +43,7 @@ class AgentContextBuilder:
             "agent_run_id": agent_run.id,
             "user_request": agent_run.user_request,
             "relevant_memories": memories,
+            "conversation_history": conversation_history or [],
             "available_tools": tools,
             "observations": [],
         }

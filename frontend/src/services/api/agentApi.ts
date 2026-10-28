@@ -35,8 +35,8 @@ export const agentApi = {
     changes: { name?: string; description?: string; status?: AgentStatus },
   ) => apiClient.patch<Agent>(`/api/v1/agents/${agentId}`, changes),
 
-  createRun: (agentId: string, input: string) =>
-    apiClient.post<AgentRunResponse>(`/api/v1/agents/${agentId}/runs`, { input }),
+  createRun: (agentId: string, input: string, conversationId?: string) =>
+    apiClient.post<AgentRunResponse>(`/api/v1/agents/${agentId}/runs`, { input, conversation_id: conversationId || null }),
 
   getRun: (runId: string) =>
     apiClient.get<AgentRunResponse>(`/api/v1/agents/runs/${runId}`),
@@ -45,4 +45,14 @@ export const agentApi = {
   // action execute; `DENY` lets the run observe the refusal and finish.
   resumeRun: (runId: string, permission: PermissionDecision) =>
     apiClient.post<AgentRunResponse>(`/api/v1/agents/runs/${runId}/resume`, { permission }),
+
+  // Answering is the other kind of ASK: the run asked the user for detail it
+  // was missing, so there is no action to allow or deny. The reply continues
+  // the same run, which is why it is not folded into `resumeRun`.
+  answerRun: (runId: string, answer: string) =>
+    apiClient.post<AgentRunResponse>(`/api/v1/agents/runs/${runId}/answer`, { answer }),
+
+  // Deletes the run and its history on the server. The endpoint is owner-scoped,
+  // so a run that is not the caller's answers 404, the same as one that is gone.
+  deleteRun: (runId: string) => apiClient.delete<void>(`/api/v1/agents/runs/${runId}`),
 };

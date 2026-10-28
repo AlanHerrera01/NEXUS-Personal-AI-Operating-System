@@ -8,6 +8,16 @@ class Settings(BaseSettings):
     app_name: str = "NEXUS API"
     environment: str = "development"
     log_level: str = "INFO"
+    # SHA-256 of a random operator key; never a browser build variable.
+    auth_token_hash: str | None = None
+    github_default_repository: str = ""
+    github_timeout_seconds: float = 20.0
+    memory_search_mode: str = "keyword"
+    embedding_base_url: str = ""
+    embedding_api_key: str | None = None
+    embedding_model: str = ""
+    embedding_dimensions: int = 1024
+    embedding_timeout_seconds: float = 20.0
     # No default password in source. The URL still has to be a *parseable* URL,
     # because the engine is built at import time and an empty string makes every
     # module that imports a repository fail to import -- turning "you forgot to
@@ -23,7 +33,11 @@ class Settings(BaseSettings):
     llm_timeout: float = 60.0
     llm_max_retries: int = 2
     llm_temperature: float = 0.2
-    llm_max_tokens: int = 512
+    # This budget covers the model's reasoning *and* its answer. The targeted
+    # model reasons by default, so a value sized for the answer alone can be
+    # spent before any content is emitted -- which surfaces as an empty reply
+    # and fails the run. 2048 leaves room for both.
+    llm_max_tokens: int = 2048
     
     # Security configuration
     trust_default_decision: str = "DENY"
@@ -153,6 +167,104 @@ class Settings(BaseSettings):
     # recorded at write time even though persistence is still allowed.
     memory_injection_flag_enabled: bool = True
 
+    # -- Web tools (web.search / web.fetch) --------------------------------
+    # web.search is provider-backed. "auto" uses Brave when a key is present
+    # and falls back to DuckDuckGo's HTML endpoint otherwise. Brave is the
+    # reliable path; DuckDuckGo is best-effort and can answer a datacenter IP
+    # with an anti-bot challenge rather than results.
+    web_search_provider: str = "auto"
+    web_search_api_key: str | None = None
+    web_search_base_url: str | None = None
+    web_search_timeout_seconds: float = 10.0
+    web_search_max_results: int = 10
+    # web.fetch reads a public page and returns a bounded excerpt. The bytes
+    # limit is applied while reading, not after buffering the whole body. The
+    # character default is sized so one fenced result stays inside the agent's
+    # per-observation budget.
+    web_fetch_timeout_seconds: float = 15.0
+    web_fetch_max_bytes: int = 2_097_152
+    web_fetch_max_chars: int = 1_200
+    # The SSRF guard already refuses service ports (22, 5432, 6379, ...); this
+    # is the stricter allowlist for a web fetcher.
+    web_fetch_allowed_ports: str = "80,443"
+
+    # -- Files and documents ------------------------------------------------
+    # The workspace is a jail, not a hint. Every path is resolved under this
+    # root and sensitive names (.env, private keys) are refused even when they
+    # live inside it. Compose mounts ./workspace read-only at /workspace.
+    files_workspace_root: str = "./workspace"
+    files_max_read_bytes: int = 10_485_760
+    files_max_search_bytes: int = 1_048_576
+    files_max_search_files: int = 5_000
+    files_max_search_results: int = 50
+    files_max_extract_bytes: int = 20_971_520
+
+    # -- Local knowledge base ----------------------------------------------
+    knowledge_max_document_chars: int = 200_000
+    knowledge_chunk_chars: int = 1_200
+    knowledge_chunk_overlap: int = 150
+
+    # -- Email (read and draft only) ---------------------------------------
+    # Sending is deliberately absent. The tools can read IMAP and append a
+    # message to the Drafts mailbox; nothing here speaks SMTP.
+    email_enabled: bool = False
+    email_imap_host: str | None = None
+    email_imap_port: int = 993
+    email_imap_username: str | None = None
+    email_imap_password: str | None = None
+    email_imap_use_ssl: bool = True
+    email_default_mailbox: str = "INBOX"
+    email_drafts_mailbox: str = "Drafts"
+    email_from_address: str | None = None
+    email_timeout_seconds: float = 15.0
+    email_max_messages: int = 25
+    email_max_body_chars: int = 20_000
+
+    # -- Docker (read-only logs) -------------------------------------------
+    # The socket is mounted read-only in compose. Access is still limited to
+    # exact names or glob patterns in this allowlist: reading one container's
+    # logs must not become a way to read every container on the host.
+    docker_socket_path: str = "/var/run/docker.sock"
+    docker_allowed_containers: str = ""
+    docker_timeout_seconds: float = 10.0
+    docker_max_tail: int = 2_000
+    docker_max_log_chars: int = 50_000
+
+    # -- Git (read-only diff) ----------------------------------------------
+    # The repository is mounted read-only at /repo in compose (outside the
+    # read-only /workspace mount so Docker can create it).
+    git_repo_path: str = "."
+    git_timeout_seconds: float = 15.0
+    git_max_diff_chars: int = 50_000
+
+    # -- MCP servers registered from the panel -----------------------------
+    # Registration stores a row; these bounds govern the connection that is
+    # opened later, either by the "test connection" action or by an agent run.
+    # They are deliberately smaller than the generic tool timeout so a broken
+    # server cannot consume the whole run budget.
+    mcp_connect_timeout_seconds: float = 8.0
+    mcp_tool_timeout_seconds: float = 25.0
+    # Tool discovery is untrusted input. Cap how much of it reaches a prompt.
+    mcp_max_tools_per_server: int = 40
+    mcp_max_total_tools: int = 80
+    mcp_max_description_chars: int = 600
+    mcp_max_schema_chars: int = 8_000
+    mcp_max_output_chars: int = 20_000
+    # Running an arbitrary command supplied by the form is remote code
+    # execution. It stays off unless the deployment opts in *and* names the
+    # exact executable in the allowlist below.
+    mcp_allow_stdio: bool = False
+    mcp_allowed_stdio_commands: str = ""
+    # Remote MCP servers are subject to the SSRF guard. A local server can be
+    # allowed explicitly with host or host:port entries, which is the only way
+    # to reach loopback/private space.
+    mcp_allowed_private_hosts: str = ""
+    # Reference this from an MCP header as
+    # ``Authorization=Bearer ${GITHUB_PERSONAL_ACCESS_TOKEN}`` so the token is
+    # read from the environment at connect time instead of being stored in the
+    # mcp_servers table.
+    github_personal_access_token: str | None = None
+
     # HTTP hardening.
     # Vite serves on either host spelling, and they are distinct CORS origins.
     cors_allowed_origins: str = (
@@ -242,6 +354,22 @@ class Settings(BaseSettings):
         is not a limit. Raising here means the process refuses to boot, which is
         the only moment at which an operator is guaranteed to still be looking.
         """
+        if self.auth_token_hash is not None:
+            if len(self.auth_token_hash) != 64 or any(c not in "0123456789abcdef" for c in self.auth_token_hash):
+                raise ValueError("auth_token_hash must be a lowercase SHA-256 hex digest")
+        if self.github_timeout_seconds <= 0 or self.embedding_timeout_seconds <= 0:
+            raise ValueError("provider timeouts must be greater than zero")
+        if self.memory_search_mode not in {"keyword", "semantic"}:
+            raise ValueError("memory_search_mode must be keyword or semantic")
+        if not 1 <= self.embedding_dimensions <= 16000:
+            raise ValueError("embedding_dimensions must be between 1 and 16000")
+        if self.memory_search_mode == "semantic":
+            from urllib.parse import urlsplit
+            endpoint = urlsplit(self.embedding_base_url)
+            if endpoint.scheme != "https" or not endpoint.netloc or endpoint.username or endpoint.password or endpoint.query or endpoint.fragment:
+                raise ValueError("semantic memory requires an HTTPS embedding_base_url without credentials or query")
+            if not self.embedding_api_key or not self.embedding_model:
+                raise ValueError("semantic memory requires embedding_api_key and embedding_model")
         if self.trust_default_decision not in {"DENY", "ASK"}:
             # ALLOW is reachable from the environment, which would make the whole
             # policy layer a no-op that reads as configured.
@@ -298,6 +426,107 @@ class Settings(BaseSettings):
         if self.hsts_max_age_seconds < 0:
             raise ValueError("hsts_max_age_seconds must not be negative")
 
+        if self.web_search_provider not in {"auto", "brave", "duckduckgo"}:
+            raise ValueError(
+                "web_search_provider must be 'auto', 'brave' or 'duckduckgo'"
+            )
+        if self.web_search_provider == "brave" and not self.web_search_api_key:
+            # Asking for Brave explicitly and then silently falling back to a
+            # scraper would hide the misconfiguration rather than report it.
+            raise ValueError(
+                "web_search_provider=brave requires web_search_api_key"
+            )
+        if self.web_search_timeout_seconds <= 0:
+            raise ValueError("web_search_timeout_seconds must be greater than zero")
+        if not 1 <= self.web_search_max_results <= 20:
+            raise ValueError("web_search_max_results must be between 1 and 20")
+        if self.web_fetch_timeout_seconds <= 0:
+            raise ValueError("web_fetch_timeout_seconds must be greater than zero")
+        if self.web_fetch_max_bytes < 1_024:
+            raise ValueError("web_fetch_max_bytes must be at least 1024")
+        if not 200 <= self.web_fetch_max_chars <= 20_000:
+            raise ValueError("web_fetch_max_chars must be between 200 and 20000")
+
+        ports = [
+            port.strip()
+            for port in self.web_fetch_allowed_ports.split(",")
+            if port.strip()
+        ]
+        if not ports:
+            raise ValueError("web_fetch_allowed_ports must list at least one port")
+        for port in ports:
+            if not port.isdigit() or not 1 <= int(port) <= 65_535:
+                raise ValueError(
+                    f"web_fetch_allowed_ports contains an invalid port: {port}"
+                )
+
+        if not self.files_workspace_root.strip():
+            raise ValueError("files_workspace_root must not be empty")
+        for name in (
+            "files_max_read_bytes",
+            "files_max_search_bytes",
+            "files_max_search_files",
+            "files_max_extract_bytes",
+            "knowledge_max_document_chars",
+            "knowledge_chunk_chars",
+            "docker_max_tail",
+            "docker_max_log_chars",
+        ):
+            if getattr(self, name) < 100:
+                raise ValueError(f"{name} must be at least 100")
+        if self.files_max_search_results < 1:
+            raise ValueError("files_max_search_results must be at least 1")
+        if self.knowledge_chunk_overlap < 0:
+            raise ValueError("knowledge_chunk_overlap must not be negative")
+        if self.knowledge_chunk_overlap >= self.knowledge_chunk_chars:
+            raise ValueError(
+                "knowledge_chunk_overlap must be smaller than knowledge_chunk_chars"
+            )
+
+        if not 1 <= self.email_imap_port <= 65_535:
+            raise ValueError("email_imap_port must be a valid TCP port")
+        if self.email_timeout_seconds <= 0:
+            raise ValueError("email_timeout_seconds must be greater than zero")
+        if self.email_max_messages < 1:
+            raise ValueError("email_max_messages must be at least 1")
+        if self.email_max_body_chars < 500:
+            raise ValueError("email_max_body_chars must be at least 500")
+        if not self.email_default_mailbox.strip():
+            raise ValueError("email_default_mailbox must not be empty")
+        if not self.email_drafts_mailbox.strip():
+            raise ValueError("email_drafts_mailbox must not be empty")
+
+        if self.docker_timeout_seconds <= 0:
+            raise ValueError("docker_timeout_seconds must be greater than zero")
+        if self.git_timeout_seconds <= 0:
+            raise ValueError("git_timeout_seconds must be greater than zero")
+        if self.git_max_diff_chars < 100:
+            raise ValueError("git_max_diff_chars must be at least 100")
+        if not self.git_repo_path.strip():
+            raise ValueError("git_repo_path must not be empty")
+
+        if self.mcp_connect_timeout_seconds <= 0:
+            raise ValueError("mcp_connect_timeout_seconds must be greater than zero")
+        if self.mcp_tool_timeout_seconds <= 0:
+            raise ValueError("mcp_tool_timeout_seconds must be greater than zero")
+        for name in (
+            "mcp_max_tools_per_server",
+            "mcp_max_total_tools",
+            "mcp_max_description_chars",
+            "mcp_max_schema_chars",
+            "mcp_max_output_chars",
+        ):
+            if getattr(self, name) < 1:
+                raise ValueError(f"{name} must be greater than zero")
+        if self.mcp_allow_stdio and not self.mcp_allowed_stdio_commands.strip():
+            # Opting in without an allowlist is the dangerous half of the
+            # setting. Requiring both means a form cannot turn itself into a
+            # process launcher by flipping one boolean.
+            raise ValueError(
+                "mcp_allow_stdio requires mcp_allowed_stdio_commands to name at "
+                "least one executable"
+            )
+
         origins = [
             origin.strip()
             for origin in self.cors_allowed_origins.split(",")
@@ -323,6 +552,22 @@ class Settings(BaseSettings):
     def disabled_skill_names(self) -> frozenset[str]:
         return frozenset(
             name.strip() for name in self.disabled_skills.split(",") if name.strip()
+        )
+
+    @property
+    def web_fetch_allowed_port_set(self) -> frozenset[int]:
+        return frozenset(
+            int(port.strip())
+            for port in self.web_fetch_allowed_ports.split(",")
+            if port.strip()
+        )
+
+    @property
+    def docker_allowed_container_patterns(self) -> tuple[str, ...]:
+        return tuple(
+            pattern.strip()
+            for pattern in self.docker_allowed_containers.split(",")
+            if pattern.strip()
         )
 
 
